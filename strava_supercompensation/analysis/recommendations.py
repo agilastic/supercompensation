@@ -799,7 +799,7 @@ class RecommendationEngine:
                 # For future days, simulate recent activities by using current pattern
                 sport_rec = self._get_sport_specific_recommendation(rec_type, form, [], recent_activities)
 
-            recommendations.append({
+            plan_entry = {
                 "day": day + 1,
                 "date": (datetime.now(timezone.utc) + timedelta(days=day)).date().isoformat(),
                 "recommendation": rec_type,
@@ -808,7 +808,15 @@ class RecommendationEngine:
                 "alternative_activities": sport_rec["alternatives"],
                 "suggested_load": load,
                 "predicted_form": round(form, 1),
-            })
+            }
+
+            # Add double session fields if present
+            if sport_rec.get("second_activity"):
+                plan_entry["second_activity"] = sport_rec["second_activity"]
+                plan_entry["session_timing"] = sport_rec["session_timing"]
+                plan_entry["double_rationale"] = sport_rec["double_rationale"]
+
+            recommendations.append(plan_entry)
 
         return recommendations
 
@@ -953,11 +961,120 @@ class RecommendationEngine:
             primary_activity, intensity, recent_sports, today_activities
         )
 
-        return {
+        # Check if double session is recommended
+        double_session = self._get_double_session_recommendation(
+            intensity, primary_activity, recent_sports, today_activities
+        )
+
+        result = {
             "activity": primary_activity,
             "rationale": rationale,
             "alternatives": alternatives
         }
+
+        if double_session:
+            result.update(double_session)
+
+        return result
+
+    def _get_double_session_recommendation(
+        self,
+        intensity: str,
+        primary_activity: str,
+        recent_sports: Dict,
+        today_activities: List[Dict] = None
+    ) -> Optional[Dict]:
+        """
+        Determine if a double session is recommended based on Olympic training principles.
+
+        Returns dict with second_activity, session_timing, and double_rationale if recommended.
+        """
+        # Skip double sessions for REST or if already trained today
+        if intensity == "REST" or (today_activities and len(today_activities) > 0):
+            return None
+
+        # Get recent strength training usage
+        recent_strength = recent_sports.get("WeightTraining", {}).get("last_used", 999)
+        recent_workout = recent_sports.get("Workout", {}).get("last_used", 999)
+
+        # Smart double session combinations based on sports science
+        double_session_combinations = {
+            # EASY intensity - perfect for combining cardio + strength
+            "Zone 2 Endurance Ride": {
+                "condition": lambda: intensity == "EASY" and recent_strength > 2,
+                "second_activity": "Strength Training (Evening)",
+                "timing": "6+ hours apart (AM cardio, PM strength)",
+                "rationale": "Low-impact cardio doesn't interfere with strength gains • Optimal hormone response"
+            },
+            "Conversational Run": {
+                "condition": lambda: intensity == "EASY" and recent_strength > 3,
+                "second_activity": "Mobility & Core Work",
+                "timing": "4+ hours apart (AM run, PM mobility)",
+                "rationale": "Easy run + evening mobility prevents injury • Enhances recovery"
+            },
+            "Conversational Hike": {
+                "condition": lambda: intensity == "EASY" and recent_strength > 2,
+                "second_activity": "Yoga/Stretching",
+                "timing": "Evening (2+ hours after hike)",
+                "rationale": "Nature therapy + flexibility work • Mental and physical recovery"
+            },
+
+            # MODERATE intensity - carefully selected combinations
+            "Tempo Run": {
+                "condition": lambda: intensity == "MODERATE" and recent_strength > 4,
+                "second_activity": "Recovery Stretching",
+                "timing": "Evening (3+ hours after run)",
+                "rationale": "Post-tempo recovery work prevents stiffness • Lactate clearance"
+            },
+            "Strength Training": {
+                "condition": lambda: intensity == "MODERATE" and recent_sports.get("Ride", {}).get("last_used", 999) > 1,
+                "second_activity": "Easy Recovery Ride",
+                "timing": "4+ hours apart (AM strength, PM easy cycling)",
+                "rationale": "Active recovery cycling enhances muscle recovery • Different energy systems"
+            },
+
+            # HARD intensity - recovery-focused second sessions only
+            "Threshold Intervals": {
+                "condition": lambda: intensity == "HARD",
+                "second_activity": "Foam Rolling & Stretching",
+                "timing": "Evening (3+ hours after intervals)",
+                "rationale": "Essential recovery work after high intensity • Prevents muscle tightness"
+            },
+            "FTP Intervals (Bike)": {
+                "condition": lambda: intensity == "HARD",
+                "second_activity": "Gentle Yoga",
+                "timing": "Evening (2+ hours after intervals)",
+                "rationale": "Parasympathetic recovery after intense training • Stress hormone regulation"
+            },
+
+            # PEAK intensity - minimal second sessions
+            "VO2 Max Intervals": {
+                "condition": lambda: intensity == "PEAK",
+                "second_activity": "Light Mobility Work",
+                "timing": "Evening (4+ hours after intervals)",
+                "rationale": "Gentle movement aids recovery from peak efforts • Maintain flexibility"
+            }
+        }
+
+        # Check if primary activity qualifies for double session
+        combo = double_session_combinations.get(primary_activity)
+        if combo and combo["condition"]():
+            return {
+                "second_activity": combo["second_activity"],
+                "session_timing": combo["timing"],
+                "double_rationale": combo["rationale"]
+            }
+
+        # General rules for strength training gaps (Olympic training principle)
+        if recent_strength > 5:  # Haven't done strength in 5+ days
+            if intensity in ["EASY", "MODERATE"]:
+                return {
+                    "second_activity": "Strength Training (Evening)",
+                    "session_timing": "6+ hours apart",
+                    "double_rationale": "⚠️ Strength training overdue (5+ days) • Essential for balanced development"
+                }
+
+        return None
 
     def _analyze_recent_sport_usage(self, recent_activities: List[Dict]) -> Dict[str, Dict]:
         """Analyze recent sport usage patterns."""

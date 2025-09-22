@@ -311,6 +311,13 @@ def recommend():
         if recommendation.get('alternative_activities'):
             rec_text += f"[bold]Alternatives:[/bold] {', '.join(recommendation['alternative_activities'])}\n"
 
+        # Add double session information if available
+        if recommendation.get('second_activity'):
+            rec_text += f"\n[bold cyan]Double Session Opportunity:[/bold cyan]\n"
+            rec_text += f"[bold]Second Activity:[/bold] {recommendation['second_activity']}\n"
+            rec_text += f"[bold]Timing:[/bold] {recommendation['session_timing']}\n"
+            rec_text += f"[bold]Why Double:[/bold] {recommendation['double_rationale']}\n"
+
         if recommendation.get('suggested_load'):
             rec_text += f"[bold]Suggested Load:[/bold] {recommendation['suggested_load']:.0f}\n"
 
@@ -343,12 +350,13 @@ def recommend():
             if training_plan:
                 title = f"{days}-Day Training Plan"
                 table = Table(title=title, box=box.ROUNDED)
-                table.add_column("Day", style="cyan", width=5)
-                table.add_column("Date", style="white", width=12)
-                table.add_column("Recommendation", style="yellow", width=15)
-                table.add_column("Activity", style="blue", width=50)
-                table.add_column("Load", style="green", width=6)
-                table.add_column("Form", style="magenta", width=6)
+                table.add_column("Day", style="cyan", width=3)
+                table.add_column("Date", style="white", width=8)
+                table.add_column("Intensity", style="yellow", width=8)
+                table.add_column("Activity", style="blue", width=26)
+                table.add_column("2nd Session", style="green", width=28)
+                table.add_column("Load", style="magenta", width=4)
+                table.add_column("Form", style="cyan", width=4)
 
                 # For 30-day plan, add week separators
                 current_week = -1
@@ -360,10 +368,11 @@ def recommend():
                         current_week = week_num
                         table.add_section()
                         table.add_row(
-                            f"[bold]Wk{week_num+1}[/bold]",
-                            "[dim]───────────[/dim]",
-                            "[dim]───────────────[/dim]",
-                            "[dim]──────────────────────────────────────────────[/dim]",
+                            f"[bold]W{week_num+1}[/bold]",
+                            "[dim]────────[/dim]",
+                            "[dim]────────[/dim]",
+                            "[dim]──────────────────────[/dim]",
+                            "[dim]────────────────────────[/dim]",
                             "[dim]────[/dim]",
                             "[dim]────[/dim]"
                         )
@@ -379,16 +388,33 @@ def recommend():
                     }
                     rec_color = rec_colors.get(plan['recommendation'], "white")
 
-                    # Get full activity name (now we have 50 characters width)
+                    # Get activity name
                     activity = plan.get('activity', 'Unknown')
-                    if len(activity) > 48:
-                        activity = activity[:45] + "..."
+                    if len(activity) > 26:
+                        activity = activity[:23] + "..."
+
+                    # Get second session info
+                    second_session = ""
+                    if plan.get('second_activity'):
+                        second_activity = plan['second_activity']
+                        if len(second_activity) > 28:
+                            second_session = second_activity[:25] + "..."
+                        else:
+                            second_session = second_activity
+                    else:
+                        second_session = "—"
+
+                    # Format date (shorter)
+                    date_str = plan['date']
+                    if len(date_str) > 8:
+                        date_str = date_str[5:]  # Remove year, keep MM-DD
 
                     table.add_row(
                         str(plan['day']),
-                        plan['date'],
+                        date_str,
                         f"[{rec_color}]{plan['recommendation']}[/{rec_color}]",
                         f"[blue]{activity}[/blue]",
+                        f"[green]{second_session}[/green]" if plan.get('second_activity') else f"[dim]{second_session}[/dim]",
                         f"{plan['suggested_load']:.0f}",
                         f"{plan['predicted_form']:.1f}",
                     )

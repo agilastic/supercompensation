@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from typing import Optional
-from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Boolean, Text
+from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Boolean, Text, ForeignKey
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 
@@ -343,3 +343,96 @@ class PeriodizationState(Base):
 
     def __repr__(self):
         return f"<PeriodizationState(user_id={self.user_id}, week={self.current_week}, phase={self.current_phase})>"
+
+
+class PerformanceOutcome(Base):
+    """Track performance outcomes to create feedback loop for model adaptation."""
+    __tablename__ = "performance_outcomes"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(String(50), default="default", index=True)
+    activity_id = Column(String(100), ForeignKey("activities.strava_id"), nullable=False)
+    date = Column(DateTime, nullable=False)
+
+    # Recommendation that was given
+    recommended_type = Column(String(50))  # REST, RECOVERY, EASY, MODERATE, HARD, PEAK
+    recommended_load = Column(Float)
+    recommended_activity = Column(String(100))
+
+    # What actually happened
+    actual_type = Column(String(50))  # Type of activity performed
+    actual_load = Column(Float)  # Actual training load
+    actual_sport = Column(String(50))  # Sport type performed
+
+    # Performance metrics
+    perceived_effort = Column(Float)  # RPE 1-10 scale
+    performance_quality = Column(Float)  # Subjective quality rating 1-10
+    fatigue_next_day = Column(Float)  # Fatigue rating next day 1-10
+
+    # Physiological metrics
+    efficiency_factor = Column(Float)  # Power/HR or Pace/HR
+    aerobic_decoupling = Column(Float)  # HR drift percentage
+    variability_index = Column(Float)  # Power/pace variability
+
+    # Recovery metrics
+    hrv_change = Column(Float)  # HRV change from baseline
+    resting_hr_change = Column(Float)  # RHR change from baseline
+    sleep_quality_impact = Column(Float)  # Sleep score change
+
+    # Outcome assessment
+    compliance_score = Column(Float)  # How well recommendation was followed (0-1)
+    outcome_score = Column(Float)  # Overall outcome quality (0-1)
+    adaptation_needed = Column(String(100))  # Type of adaptation suggested
+
+    # Model state at time of recommendation
+    fitness_at_recommendation = Column(Float)
+    fatigue_at_recommendation = Column(Float)
+    form_at_recommendation = Column(Float)
+
+    # Metadata
+    notes = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def __repr__(self):
+        return f"<PerformanceOutcome(date={self.date}, compliance={self.compliance_score}, outcome={self.outcome_score})>"
+
+
+class AdaptiveModelParameters(Base):
+    """Store adaptive model parameters that learn from athlete's responses."""
+    __tablename__ = "adaptive_model_parameters"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(String(50), default="default", unique=True)
+
+    # Current adapted parameters
+    fitness_decay = Column(Float, default=42.0)  # Days
+    fatigue_decay = Column(Float, default=7.0)   # Days
+    fitness_magnitude = Column(Float, default=0.1)
+    fatigue_magnitude = Column(Float, default=0.15)
+
+    # Learning metrics
+    total_adaptations = Column(Integer, default=0)  # Number of adaptations made
+    last_adaptation = Column(DateTime)
+    adaptation_confidence = Column(Float, default=0.5)  # Confidence in current parameters (0-1)
+
+    # Performance tracking
+    recent_performance_trend = Column(Float)  # Recent performance delta
+    overtraining_incidents = Column(Integer, default=0)
+    undertraining_incidents = Column(Integer, default=0)
+
+    # Parameter bounds (personalized over time)
+    min_fitness_decay_personal = Column(Float, default=20.0)
+    max_fitness_decay_personal = Column(Float, default=60.0)
+    min_fatigue_decay_personal = Column(Float, default=3.0)
+    max_fatigue_decay_personal = Column(Float, default=14.0)
+
+    # Sport-specific adjustments
+    sport_specific_multipliers = Column(Text)  # JSON storing per-sport multipliers
+
+    # Metadata
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def __repr__(self):
+        return f"<AdaptiveModelParameters(user_id={self.user_id}, fitness_decay={self.fitness_decay}, fatigue_decay={self.fatigue_decay})>"

@@ -334,6 +334,7 @@ def recommend():
                 table.add_column("2nd Session", style="green", width=29)
                 table.add_column("Load", style="magenta", width=4)
                 table.add_column("Form", style="cyan", width=6)
+                table.add_column("Fitness", style="green", width=7)
 
                 # For 30-day plan, add week separators
                 current_week = -1
@@ -440,6 +441,7 @@ def recommend():
                         f"[green]{second_session}[/green]" if plan.get('second_activity') else f"[dim]{second_session}[/dim]",
                         f"{plan['suggested_load']:.0f}",
                         f"{plan['predicted_form']:.1f}",
+                        f"{plan.get('predicted_fitness', 0):.1f}",
                     )
 
                 console.print("\n", table)
@@ -1025,6 +1027,7 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
             table.add_column("2nd Session", style="green", width=26)
             table.add_column("Load", style="magenta", width=4)
             table.add_column("Form", style="cyan", width=6)
+            table.add_column("Fitness", style="green", width=7)
 
             # For 30-day plan, add week separators
             current_week = -1
@@ -1132,6 +1135,7 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
                     f"[green]{second_session}[/green]" if plan.get('second_activity') else f"[dim]{second_session}[/dim]",
                     f"{plan['suggested_load']:.0f}",
                     f"{plan['predicted_form']:.1f}",
+                    f"{plan.get('predicted_fitness', 0):.1f}",
                 )
 
             console.print(table)

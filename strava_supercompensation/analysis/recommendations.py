@@ -98,9 +98,37 @@ class RecommendationEngine:
     ) -> Dict[str, any]:
         """Calculate training recommendation based on metrics and recent activities."""
 
+        # 🚨 CRITICAL HRV SAFETY CHECK FIRST (Olympic/Sports Medicine Protocol)
+        if hrv_baseline_analysis and hrv_baseline_analysis.get('readiness_score') is not None:
+            hrv_score = hrv_baseline_analysis['readiness_score']
+            if hrv_score < 45:  # Critical threshold for comprehensive readiness
+                return {
+                    "type": TrainingRecommendation.REST.value,
+                    "intensity": "rest",
+                    "duration_minutes": 0,
+                    "activity": "Complete Rest",
+                    "activity_rationale": "Comprehensive readiness critically low - recovery required",
+                    "alternative_activities": ["Light stretching", "Meditation", "Sleep"],
+                    "notes": [
+                        f"🚨 CRITICAL: Comprehensive Readiness {hrv_score:.0f}/100",
+                        "German sports science threshold: >60 for training",
+                        "Multiple biomarkers indicate overreaching risk",
+                        "Monitor daily until readiness >60"
+                    ],
+                    "metrics": {
+                        "comprehensive_readiness": hrv_score,
+                        "readiness_status": "CRITICAL",
+                        "training_contraindicated": True
+                    }
+                }
+
         # CHECK TODAY'S ACTIVITIES FIRST
         if today_activities:
-            total_today_load = sum(a.get('training_load', 0) for a in today_activities)
+            # Apply sport-specific load multipliers
+            total_today_load = sum(
+                a.get('training_load', 0) * config.get_sport_load_multiplier(a.get('type', 'Unknown'))
+                for a in today_activities
+            )
             total_today_duration = sum(a.get('moving_time', 0) for a in today_activities) / 60  # minutes
 
             # If any meaningful training already done today (adjusted thresholds)
@@ -214,26 +242,27 @@ class RecommendationEngine:
                 recommendation["metrics"]["hrv_baseline_mean"] = round(baseline['mean_rmssd'], 1)
                 recommendation["metrics"]["hrv_coefficient_variation"] = round(baseline['coefficient_variation'], 1)
 
-            # Apply readiness-based modifications
-            if readiness_level == 'critical':
+            # Apply readiness-based modifications with HRV override
+            if readiness_level == 'critical' or readiness_score < 45:
                 return {
                     **recommendation,
                     "type": TrainingRecommendation.REST.value,
                     "intensity": "rest",
                     "duration_minutes": 0,
                     "notes": [
-                        f"CRITICAL wellness state detected (German methodology)",
-                        f"Readiness score: {readiness_score:.0f}/100",
-                        "Complete rest required for autonomic recovery"
+                        f"🚨 CRITICAL HRV state detected",
+                        f"HRV Readiness: {readiness_score:.0f}/100 (Normal: >70)",
+                        "Autonomic nervous system recovery required",
+                        "Training contraindicated until HRV >55"
                     ] + hrv_baseline_analysis.get('recommendations', [])[:2]
                 }
-            elif readiness_level == 'poor':
+            elif readiness_level == 'poor' or readiness_score < 60:
                 recommendation.update({
                     "type": TrainingRecommendation.RECOVERY.value,
                     "intensity": "recovery",
-                    "duration_minutes": max(20, int(30 * 0.6)),
+                    "duration_minutes": max(20, int(40 * 0.7)),
                 })
-                recommendation["notes"].append(f"German methodology indicates poor readiness ({readiness_score:.0f}/100)")
+                recommendation["notes"].append(f"⚠️ Poor HRV readiness ({readiness_score:.0f}/100) - Recovery only")
 
             # Calculate HRV baseline-based training modifier
             if readiness_score >= 85:
@@ -628,8 +657,11 @@ class RecommendationEngine:
                 name_lower = (activity.get("name") or "").lower()
                 is_race = any(keyword in name_lower for keyword in ["race", "competition", "marathon", "10k", "5k", "triathlon"])
 
-            # Calculate required recovery time
-            recovery_hours = multisport_calc.calculate_recovery_time(activity)
+            # Calculate required recovery time (with sport-specific load adjustment)
+            # Adjust activity load for sport-specific impact
+            adjusted_activity = activity.copy()
+            adjusted_activity['training_load'] = activity.get('training_load', 0) * config.get_sport_load_multiplier(activity.get('type', 'Unknown'))
+            recovery_hours = multisport_calc.calculate_recovery_time(adjusted_activity)
 
             # Calculate hours since activity
             activity_datetime = activity["start_date"]
@@ -767,24 +799,33 @@ class RecommendationEngine:
             # Update and get current periodization state
             periodization_state = self.update_periodization_state()
 
+        # Reset sport usage tracking for this plan generation
+        self._plan_sport_usage = {}
+        self._week_sport_usage = {}  # Track sports per week
+
         # Generate training plan
         for day in range(days):
             # Apply daily decay first (except for day 0)
             if day > 0:
-                fitness *= 0.98  # Approximate daily decay
-                fatigue *= 0.90  # Faster fatigue decay
+                # Use actual decay rates from config (exponential decay)
+                fitness *= (1 - 1/config.FITNESS_DECAY_RATE)  # Based on 42-day half-life
+                fatigue *= (1 - 1/config.FATIGUE_DECAY_RATE)  # Based on 7-day half-life
 
             form = fitness - fatigue
 
             # Special handling for today (day 0)
             if day == 0 and today_activities:
-                total_today_load = sum(a.get('training_load', 0) for a in today_activities)
+                # Apply sport-specific load multipliers
+                total_today_load = sum(
+                    a.get('training_load', 0) * config.get_sport_load_multiplier(a.get('type', 'Unknown'))
+                    for a in today_activities
+                )
                 total_today_duration = sum(a.get('moving_time', 0) for a in today_activities) / 60
 
                 # If already trained today (same logic as main recommendation)
                 if total_today_load >= 30 or total_today_duration >= 20:
                     rec_type = TrainingRecommendation.REST.value
-                    load = total_today_load  # Use actual load from today
+                    load = 0  # REST means no additional load for future calculations
                 else:
                     # Not enough training yet today
                     rec_type = TrainingRecommendation.RECOVERY.value
@@ -797,8 +838,9 @@ class RecommendationEngine:
                     # Fallback to old method if no state available
                     rec_type, load = self._get_periodized_recommendation(day, form, fatigue, fitness)
 
-            # Store current form for display
+            # Store current form and fitness for display
             current_form = form
+            current_fitness = fitness
 
             # Get sport-specific activity for this day
             if day == 0 and today_activities:
@@ -808,15 +850,19 @@ class RecommendationEngine:
                 # For future days, simulate recent activities by using current pattern
                 sport_rec = self._get_sport_specific_recommendation(rec_type, form, [], recent_activities)
 
+            # 🏆 Calculate consistent date for both display and race logic
+            plan_date = datetime.now() + timedelta(days=day)
+
             plan_entry = {
                 "day": day + 1,
-                "date": (datetime.now(timezone.utc) + timedelta(days=day)).date().isoformat(),
+                "date": plan_date.date().isoformat(),
                 "recommendation": rec_type,
                 "activity": sport_rec["activity"],
                 "activity_rationale": sport_rec["rationale"],
                 "alternative_activities": sport_rec["alternatives"],
                 "suggested_load": load,
                 "predicted_form": round(current_form, 1),
+                "predicted_fitness": round(current_fitness, 1),
             }
 
             # Add double session fields if present
@@ -824,6 +870,60 @@ class RecommendationEngine:
                 plan_entry["second_activity"] = sport_rec["second_activity"]
                 plan_entry["session_timing"] = sport_rec["session_timing"]
                 plan_entry["double_rationale"] = sport_rec["double_rationale"]
+
+            # 🏆 Add race day information (using same plan_date)
+            days_to_race = config.days_to_next_race(plan_date)
+            is_race_day = False
+
+            # Check if this is a race day (compare only dates, not times)
+            race_dates = config.get_race_dates()
+            for race_date in race_dates:
+                if race_date.date() == plan_date.date():
+                    is_race_day = True
+                    race_type, race_distance = config.get_race_details(race_date)
+                    plan_entry["is_race_day"] = True
+                    plan_entry["race_priority"] = config.get_race_priority(race_date)
+                    plan_entry["race_type"] = race_type
+                    plan_entry["race_distance"] = race_distance
+
+                    # Format race description
+                    if race_type == "Run":
+                        if race_distance == 21.1:
+                            race_name = "Half Marathon"
+                        elif race_distance == 42.2:
+                            race_name = "Marathon"
+                        elif race_distance <= 10:
+                            race_name = f"{int(race_distance)}K"
+                        else:
+                            race_name = f"{race_distance}km Run"
+                    elif race_type == "Ride":
+                        race_name = f"{int(race_distance)}km Ride"
+                    elif race_type == "Hike":
+                        race_name = f"{int(race_distance)}km Hike"
+                    else:
+                        race_name = f"{race_type} {race_distance}km"
+
+                    plan_entry["activity"] = f"🏆 RACE - {race_name}"
+                    taper_days = config.get_taper_duration_for_race(race_date)
+                    plan_entry["notes"] = plan_entry.get("notes", []) + [
+                        f"{plan_entry['race_priority']} Priority - {taper_days} day taper"
+                    ]
+                    break
+
+            # Add tapering phase indicators (4-day taper)
+            if not is_race_day and config.is_in_taper_phase(plan_date) and days_to_race != float('inf'):
+                plan_entry["taper_phase"] = True
+                plan_entry["days_to_race"] = int(days_to_race)
+
+                if days_to_race <= 1:
+                    plan_entry["taper_stage"] = "PEAK"
+                    plan_entry["activity"] = f"⭐ PEAK - {plan_entry['activity']}"
+                elif days_to_race <= 2:
+                    plan_entry["taper_stage"] = "FINAL"
+                    plan_entry["activity"] = f"🔥 FINAL - {plan_entry['activity']}"
+                elif days_to_race <= 4:
+                    plan_entry["taper_stage"] = "TAPER"
+                    plan_entry["activity"] = f"📉 TAPER - {plan_entry['activity']}"
 
             recommendations.append(plan_entry)
 
@@ -840,17 +940,84 @@ class RecommendationEngine:
     def _get_periodized_recommendation(self, day: int, form: float, fatigue: float, fitness: float) -> Tuple[str, int]:
         """
         Generate periodized training recommendation based on day and current state.
-        Uses 3:1 loading pattern with weekly variation.
+        Uses 3:1 loading pattern with weekly variation and race peaking.
         """
         week_num = day // 7  # Week number (0-based)
         day_of_week = day % 7  # Day within week (0=Sunday)
+        current_date = datetime.now() + timedelta(days=day)
+
+        # 🏆 RACE PEAKING SYSTEM (Olympic Competition Periodization)
+        race_date, days_to_race, taper_duration = config.get_next_race_with_taper(current_date)
+        is_taper_phase = config.is_in_taper_phase(current_date)
+
+        # 🏥 POST-RACE RECOVERY CHECK
+        is_recovering, days_since_race, recovery_duration, past_race_date = config.is_in_recovery_phase(current_date)
+
+        # 🏥 POST-RACE RECOVERY OVERRIDE (Prevent overtraining after races)
+        if is_recovering:
+            # Get recovery intensity limit based on days since race
+            intensity_limit = config.get_recovery_intensity_limit(days_since_race)
+
+            if days_since_race <= 1:
+                # Complete rest day after race
+                return TrainingRecommendation.REST.value, 0
+            elif days_since_race <= 3:
+                # Very light recovery only
+                return TrainingRecommendation.RECOVERY.value, int(30 * intensity_limit)
+            elif days_since_race <= 7:
+                # Light activity only
+                return TrainingRecommendation.EASY.value, int(60 * intensity_limit)
+            else:
+                # Gradual return to normal training but still limited
+                if intensity_limit < 0.75:
+                    # Still in recovery period, limit to easy/moderate
+                    max_intensity = TrainingRecommendation.MODERATE.value
+                    max_duration = int(120 * intensity_limit)
+
+                    # Override any high intensity recommendations
+                    if form > 5 and day_of_week in [2, 4]:  # Normal hard days
+                        return max_intensity, max_duration
+                # Let normal logic continue but with intensity cap
 
         # Base training pattern (modified by form and fatigue)
         fatigue_ratio = fatigue / (fitness + 1e-5)
 
-        # Weekly volume progression (undulating periodization)
-        week_multipliers = [1.0, 1.1, 1.2, 0.8]  # 3 weeks build, 1 week recovery
-        week_mult = week_multipliers[week_num % 4]
+        # Weekly volume progression with race peaking override
+        if is_taper_phase and days_to_race != float('inf'):
+            # 🏆 TAPERING PROTOCOL (Sport-specific taper)
+            week_mult = config.get_taper_volume_reduction(days_to_race)
+
+            # If beyond configured days, use gradual reduction
+            if days_to_race > 5:
+                week_mult = 0.85  # Light reduction for early taper
+        else:
+            # Standard periodization when not tapering
+            week_multipliers = [1.0, 1.1, 1.2, 0.6]  # 3 weeks build, 1 week recovery
+            week_mult = week_multipliers[week_num % 4]
+
+        # 🏆 RACE-SPECIFIC INTENSITY MODIFICATIONS (Sport-specific taper)
+        if is_taper_phase and days_to_race != float('inf'):
+            if race_date:
+                race_type, race_distance = config.get_race_details(race_date)
+
+                if days_to_race <= 1:  # Day before race - REST/ACTIVATION
+                    return TrainingRecommendation.RECOVERY.value, max(15, int(20 * week_mult))
+                elif days_to_race <= 2:  # 2 days out - LIGHT OPENERS
+                    return TrainingRecommendation.EASY.value, int(30 * week_mult)
+                elif days_to_race <= taper_duration:  # Within taper period
+                    # Adjust intensity based on race type
+                    if race_type == "Run" and race_distance >= 42.2:  # Marathon
+                        # More conservative taper for marathon
+                        return TrainingRecommendation.EASY.value, int(40 * week_mult)
+                    elif race_type == "Ride" and race_distance >= 200:  # Long ride
+                        # Maintain some intensity for long rides
+                        return TrainingRecommendation.MODERATE.value, int(50 * week_mult)
+                    else:
+                        # Standard taper intensity
+                        if form > 20:
+                            return TrainingRecommendation.MODERATE.value, int(45 * week_mult)
+                        else:
+                            return TrainingRecommendation.EASY.value, int(40 * week_mult)
 
         # High fatigue = reduce intensity
         if fatigue_ratio > 0.8:
@@ -859,26 +1026,26 @@ class RecommendationEngine:
             else:
                 return TrainingRecommendation.RECOVERY.value, int(20 * week_mult)
 
-        # Good form = quality work possible
-        if form > 10:
-            # Tuesday/Thursday = Hard days
+        # Good form = quality work possible (Olympic thresholds)
+        if form > 5:  # Lower threshold for more quality sessions
+            # Tuesday/Thursday = Hard days (Olympic intensity)
             if day_of_week in [2, 4]:
-                if form > 30:
-                    return TrainingRecommendation.PEAK.value, int(120 * week_mult)
+                if form > 25:
+                    return TrainingRecommendation.PEAK.value, int(200 * week_mult)
                 else:
-                    return TrainingRecommendation.HARD.value, int(100 * week_mult)
-            # Saturday = Long moderate
+                    return TrainingRecommendation.HARD.value, int(180 * week_mult)
+            # Saturday = Long moderate (Olympic endurance foundation)
             elif day_of_week == 6:
-                return TrainingRecommendation.MODERATE.value, int(80 * week_mult)
-            # Sunday = Recovery
+                return TrainingRecommendation.MODERATE.value, int(180 * week_mult)
+            # Sunday = Active recovery (substantial aerobic base)
             elif day_of_week == 0:
-                return TrainingRecommendation.RECOVERY.value, int(30 * week_mult)
-            # Monday/Wednesday/Friday = Easy/Moderate
+                return TrainingRecommendation.RECOVERY.value, int(80 * week_mult)
+            # Monday/Wednesday/Friday = Aerobic base building
             else:
                 if day_of_week in [1, 5]:
-                    return TrainingRecommendation.EASY.value, int(50 * week_mult)
+                    return TrainingRecommendation.EASY.value, int(150 * week_mult)
                 else:
-                    return TrainingRecommendation.MODERATE.value, int(60 * week_mult)
+                    return TrainingRecommendation.MODERATE.value, int(160 * week_mult)
 
         # Poor form = focus on recovery
         elif form < -5:
@@ -887,14 +1054,14 @@ class RecommendationEngine:
             else:
                 return TrainingRecommendation.RECOVERY.value, int(20 * week_mult)
 
-        # Neutral form = balanced approach
+        # Neutral form = balanced approach (Olympic base building)
         else:
-            if day_of_week in [2, 4]:  # Moderate intensity days
-                return TrainingRecommendation.MODERATE.value, int(70 * week_mult)
-            elif day_of_week in [0, 6]:  # Weekend easier
-                return TrainingRecommendation.EASY.value, int(40 * week_mult)
+            if day_of_week in [2, 4]:  # Moderate intensity days (Olympic load)
+                return TrainingRecommendation.MODERATE.value, int(170 * week_mult)
+            elif day_of_week in [0, 6]:  # Weekend substantial base
+                return TrainingRecommendation.EASY.value, int(130 * week_mult)
             else:
-                return TrainingRecommendation.MODERATE.value, int(60 * week_mult)
+                return TrainingRecommendation.MODERATE.value, int(150 * week_mult)
 
     def _get_sport_specific_recommendation(
         self,
@@ -1014,7 +1181,7 @@ class RecommendationEngine:
         double_session_combinations = {
             # EASY intensity - perfect for combining cardio + strength
             "Zone 2 Endurance Ride": {
-                "condition": lambda: intensity == "EASY" and recent_strength > 2,
+                "condition": lambda: intensity == "EASY" and recent_strength > 3,
                 "second_activity": "Strength Training (Evening)",
                 "timing": "6+ hours apart (AM cardio, PM strength)",
                 "rationale": "Low-impact cardio doesn't interfere with strength gains • Optimal hormone response"
@@ -1079,12 +1246,12 @@ class RecommendationEngine:
             }
 
         # General rules for strength training gaps (Olympic training principle)
-        if recent_strength > 5:  # Haven't done strength in 5+ days
-            if intensity in ["EASY", "MODERATE"]:
+        if recent_strength > 4:  # Haven't done strength in 4+ days
+            if intensity in ["EASY", "MODERATE"]:  # Only on EASY/MODERATE, not RECOVERY
                 return {
                     "second_activity": "Strength Training (Evening)",
                     "session_timing": "6+ hours apart",
-                    "double_rationale": "⚠️ Strength training overdue (5+ days) • Essential for balanced development"
+                    "double_rationale": f"⚠️ Strength training needed ({recent_strength} days) • Essential for balanced development"
                 }
 
         return None
@@ -1129,13 +1296,17 @@ class RecommendationEngine:
         user_prefs = self._get_user_sport_preferences()
         base_preference = user_prefs.get(sport, 0.1)  # Default low preference for unknown sports
 
+        # Skip sports with 0.0 preference (disabled sports)
+        if base_preference <= 0.0:
+            return 0.0
+
         # Days since last use (higher is better for rotation)
-        days_since_use = recent_sports.get(sport, {}).get('last_used', 14)  # Default to 14 if never used
-        recency_score = min(days_since_use / 7.0, 2.0)  # Max score at 7+ days
+        days_since_use = recent_sports.get(sport, {}).get('last_used', 3)  # Default to 3 if never used
+        recency_score = min(days_since_use / 7.0, 1.5)  # Max score at 7+ days (slower rotation)
 
         # Frequency penalty (recent overuse gets lower score)
         recent_frequency = recent_sports.get(sport, {}).get('frequency', 0)
-        frequency_penalty = max(0.2, 1.0 - (recent_frequency * 0.15))  # Penalty for overuse
+        frequency_penalty = max(0.2, 1.0 - (recent_frequency * 0.2))  # Penalty for overuse
 
         # Intensity appropriateness
         intensity_match = self._get_intensity_appropriateness(sport, intensity)
@@ -1143,8 +1314,12 @@ class RecommendationEngine:
         # Recovery considerations (avoid high-impact after high-impact)
         recovery_bonus = self._get_recovery_appropriateness(sport, recent_sports)
 
-        # Final score combines all factors
-        total_score = base_preference * recency_score * frequency_penalty * intensity_match * recovery_bonus
+        # Balance preferences with rotation - respect user preferences more
+        # Don't flatten preferences too much, user chose them for a reason
+        balanced_preference = base_preference
+
+        # Final score with balanced weighting
+        total_score = balanced_preference * recency_score * frequency_penalty * intensity_match * recovery_bonus
 
         return total_score
 
@@ -1253,13 +1428,120 @@ class RecommendationEngine:
             score = self._calculate_sport_rotation_score(sport, recent_sports, intensity)
             sport_scores[sport] = score
 
-        # Select the sport with highest rotation score
-        best_sport = max(sport_scores.keys(), key=lambda s: sport_scores[s])
+        # WEEKLY TARGET ALLOCATION SYSTEM - Permanent Solution
+        best_sport = self._select_sport_by_weekly_targets(sport_scores, recent_sports, intensity)
+
+        # Track usage for this plan generation
+        self._plan_sport_usage[best_sport] = self._plan_sport_usage.get(best_sport, 0) + 1
+
+        # Track weekly usage
+        if not hasattr(self, '_current_plan_days'):
+            self._current_plan_days = []
+        self._current_plan_days.append(best_sport)
+
+        current_week = (len(self._current_plan_days) - 1) // 7 + 1
+        week_key = f"week_{current_week}"
+        if week_key not in self._week_sport_usage:
+            self._week_sport_usage[week_key] = {}
+        self._week_sport_usage[week_key][best_sport] = self._week_sport_usage[week_key].get(best_sport, 0) + 1
 
         # Generate activity name based on sport and intensity
         activity_name = self._get_activity_name_for_sport_intensity(best_sport, intensity)
 
         return activity_name
+
+    def _select_sport_by_weekly_targets(self, sport_scores: dict, recent_sports: dict, intensity: str) -> str:
+        """
+        PERMANENT SOLUTION: Select sport based on weekly preference targets.
+
+        Algorithm:
+        1. Calculate current week position and day within week
+        2. Determine weekly targets from user preferences
+        3. Check current week progress vs targets
+        4. Prioritize sports that are behind their weekly targets
+        5. Fall back to rotation scores if targets are met
+        """
+        from ..config import config
+
+        # Initialize tracking if needed
+        if not hasattr(self, '_current_plan_days'):
+            self._current_plan_days = []
+        if not hasattr(self, '_week_sport_usage'):
+            self._week_sport_usage = {}
+
+        # Calculate current position in plan
+        current_day_in_plan = len(self._current_plan_days)
+        current_week = (current_day_in_plan // 7) + 1
+        day_in_week = current_day_in_plan % 7  # 0-6
+        week_key = f"week_{current_week}"
+
+        # Get current week usage
+        current_week_usage = self._week_sport_usage.get(week_key, {})
+
+        # Calculate weekly targets based on user preferences
+        weekly_targets = self._calculate_weekly_targets()
+
+        # Determine which sports are behind their weekly targets
+        eligible_sports = []
+        for sport in sport_scores.keys():
+            current_count = current_week_usage.get(sport, 0)
+            target_count = weekly_targets.get(sport, 0)
+
+            # Check if sport is behind target (accounting for week progress)
+            # If we're on day 3 of 7, we should have ~43% of weekly target completed
+            expected_progress = (day_in_week + 1) / 7.0
+            expected_count = target_count * expected_progress
+
+            if current_count < expected_count or current_count < target_count:
+                # Apply intensity filtering - some sports better for certain intensities
+                intensity_match = self._get_intensity_appropriateness(sport, intensity)
+                if intensity_match > 0.3:  # Only consider sports suitable for this intensity
+                    priority = (expected_count - current_count) * intensity_match
+                    eligible_sports.append((sport, priority))
+
+        # Select sport with highest priority (most behind target)
+        if eligible_sports:
+            eligible_sports.sort(key=lambda x: x[1], reverse=True)
+            return eligible_sports[0][0]
+
+        # Fallback: if all targets met, use rotation scores but avoid overuse
+        available_sports = []
+        for sport, score in sport_scores.items():
+            current_count = current_week_usage.get(sport, 0)
+            max_per_week = max(2, int(weekly_targets.get(sport, 0) * 1.5))  # Allow slight overuse
+
+            if current_count < max_per_week:
+                intensity_match = self._get_intensity_appropriateness(sport, intensity)
+                if intensity_match > 0.3:
+                    adjusted_score = score * intensity_match
+                    available_sports.append((sport, adjusted_score))
+
+        if available_sports:
+            available_sports.sort(key=lambda x: x[1], reverse=True)
+            return available_sports[0][0]
+
+        # Ultimate fallback: best intensity match
+        best_sport = max(sport_scores.keys(),
+                        key=lambda s: self._get_intensity_appropriateness(s, intensity))
+        return best_sport
+
+    def _calculate_weekly_targets(self) -> dict:
+        """Calculate target number of sessions per week for each sport based on preferences."""
+        from ..config import config
+
+        # Get user preferences (these are weekly percentages)
+        preferences = config.SPORT_PREFERENCES
+
+        # Calculate sessions per week (6 active days, 1 rest day for Olympic training)
+        active_days_per_week = 6  # Olympic-level training frequency
+        weekly_targets = {}
+
+        for sport, preference in preferences.items():
+            if preference > 0:
+                target_sessions = preference * active_days_per_week
+                weekly_targets[sport] = max(0.5, target_sessions)  # Minimum 0.5 to ensure inclusion
+
+        return weekly_targets
 
     def _get_activity_name_for_sport_intensity(self, sport: str, intensity: str) -> str:
         """Generate specific activity name based on sport and intensity."""
@@ -1613,6 +1895,64 @@ class RecommendationEngine:
         actual_cycle_day = periodization_state.get_current_cycle_day() + day
         actual_week = (actual_cycle_day // 7) + 1
         day_of_week = actual_cycle_day % 7
+
+        # 🏥 POST-RACE RECOVERY CHECK (Priority override for race recovery)
+        current_date = datetime.now() + timedelta(days=day)
+        is_recovering, days_since_race, recovery_duration, past_race_date = config.is_in_recovery_phase(current_date)
+
+        # 🏥 POST-RACE RECOVERY OVERRIDE (Prevent overtraining after races)
+        if is_recovering:
+            # Get recovery intensity limit based on days since race
+            intensity_limit = config.get_recovery_intensity_limit(days_since_race)
+
+            if days_since_race <= 1:
+                # Complete rest day after race
+                return TrainingRecommendation.REST.value, 0
+            elif days_since_race <= 3:
+                # Very light recovery only
+                return TrainingRecommendation.RECOVERY.value, max(10, int(30 * intensity_limit))
+            elif days_since_race <= 7:
+                # Light activity only
+                return TrainingRecommendation.EASY.value, max(20, int(60 * intensity_limit))
+            else:
+                # Gradual return to normal training but still limited
+                if intensity_limit < 0.75:
+                    # Still in recovery period, limit to easy/moderate
+                    max_intensity = TrainingRecommendation.MODERATE.value
+                    max_duration = max(30, int(120 * intensity_limit))
+
+                    # Override any high intensity recommendations
+                    if form > 5 and day_of_week in [2, 4]:  # Normal hard days
+                        return max_intensity, max_duration
+                # Let normal logic continue but with intensity cap
+
+        # 🏆 RACE PEAKING SYSTEM (Race taper takes priority over periodization)
+        race_date, days_to_race, taper_duration = config.get_next_race_with_taper(current_date)
+        is_taper_phase = config.is_in_taper_phase(current_date)
+
+        # 🏆 RACE-SPECIFIC TAPER OVERRIDE (Override periodization during taper)
+        if is_taper_phase and days_to_race != float('inf') and race_date:
+            race_type, race_distance = config.get_race_details(race_date)
+            taper_mult = config.get_taper_volume_reduction(days_to_race)
+
+            if days_to_race <= 1:  # Day before race - REST/ACTIVATION
+                return TrainingRecommendation.REST.value, 0
+            elif days_to_race <= 2:  # 2 days out - LIGHT OPENERS
+                return TrainingRecommendation.EASY.value, int(30 * taper_mult)
+            elif days_to_race <= taper_duration:  # Within taper period
+                # Adjust intensity based on race type and distance
+                if race_type == "Run" and race_distance >= 42.2:  # Marathon/Ultra
+                    # More conservative taper for long runs
+                    return TrainingRecommendation.EASY.value, int(40 * taper_mult)
+                elif race_type == "Ride" and race_distance >= 200:  # Long ride
+                    # Maintain some intensity for long rides
+                    return TrainingRecommendation.MODERATE.value, int(50 * taper_mult)
+                else:
+                    # Standard taper intensity based on current form
+                    if form > 20:
+                        return TrainingRecommendation.MODERATE.value, int(45 * taper_mult)
+                    else:
+                        return TrainingRecommendation.EASY.value, int(40 * taper_mult)
 
         # Determine phase based on actual state, not mathematical cycle
         if actual_week <= periodization_state.build_weeks:

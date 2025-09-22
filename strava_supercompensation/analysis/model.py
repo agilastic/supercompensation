@@ -4,10 +4,11 @@ import numpy as np
 from datetime import datetime, timedelta
 from typing import List, Dict, Tuple, Optional
 import pandas as pd
+import json
 
 from ..config import config
 from ..db import get_db
-from ..db.models import Activity, Metric, ModelState
+from ..db.models import Activity, Metric, ModelState, AdaptiveModelParameters, PerformanceOutcome
 
 
 class BanisterModel:
@@ -19,6 +20,8 @@ class BanisterModel:
         fatigue_decay: float = None,
         fitness_magnitude: float = None,
         fatigue_magnitude: float = None,
+        user_id: str = "default",
+        enable_adaptive: bool = None,
     ):
         """Initialize the Banister model with parameters.
 
@@ -27,11 +30,20 @@ class BanisterModel:
             fatigue_decay: Time constant for fatigue decay (days) - typically 7
             fitness_magnitude: Magnitude factor for fitness response - typically 1.0
             fatigue_magnitude: Magnitude factor for fatigue response - typically 2.0
+            user_id: User identifier for adaptive parameters
+            enable_adaptive: Enable adaptive parameter learning
         """
-        self.fitness_decay = fitness_decay or config.FITNESS_DECAY_RATE
-        self.fatigue_decay = fatigue_decay or config.FATIGUE_DECAY_RATE
-        self.fitness_magnitude = fitness_magnitude or config.FITNESS_MAGNITUDE
-        self.fatigue_magnitude = fatigue_magnitude or config.FATIGUE_MAGNITUDE
+        self.user_id = user_id
+        self.enable_adaptive = enable_adaptive if enable_adaptive is not None else config.ENABLE_ADAPTIVE_PARAMETERS
+
+        # Load adaptive parameters if enabled
+        if self.enable_adaptive:
+            self._load_adaptive_parameters()
+        else:
+            self.fitness_decay = fitness_decay or config.FITNESS_DECAY_RATE
+            self.fatigue_decay = fatigue_decay or config.FATIGUE_DECAY_RATE
+            self.fitness_magnitude = fitness_magnitude or config.FITNESS_MAGNITUDE
+            self.fatigue_magnitude = fatigue_magnitude or config.FATIGUE_MAGNITUDE
 
     def impulse_response(self, training_loads: np.ndarray, days: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Calculate fitness, fatigue, and form using impulse-response model.
@@ -113,6 +125,107 @@ class BanisterModel:
 
         return recommendations
 
+    def _load_adaptive_parameters(self):
+        """Load adaptive model parameters from database."""
+        db = get_db()
+        with db.get_session() as session:
+            params = session.query(AdaptiveModelParameters).filter_by(user_id=self.user_id).first()
+
+            if params:
+                self.fitness_decay = params.fitness_decay
+                self.fatigue_decay = params.fatigue_decay
+                self.fitness_magnitude = params.fitness_magnitude
+                self.fatigue_magnitude = params.fatigue_magnitude
+            else:
+                # Initialize with defaults and create record
+                self.fitness_decay = config.FITNESS_DECAY_RATE
+                self.fatigue_decay = config.FATIGUE_DECAY_RATE
+                self.fitness_magnitude = config.FITNESS_MAGNITUDE
+                self.fatigue_magnitude = config.FATIGUE_MAGNITUDE
+
+                # Create adaptive parameters record
+                new_params = AdaptiveModelParameters(
+                    user_id=self.user_id,
+                    fitness_decay=self.fitness_decay,
+                    fatigue_decay=self.fatigue_decay,
+                    fitness_magnitude=self.fitness_magnitude,
+                    fatigue_magnitude=self.fatigue_magnitude,
+                )
+                session.add(new_params)
+                session.commit()
+
+    def adapt_parameters(self, performance_delta: float, perceived_effort: float, fatigue_level: float):
+        """Adapt model parameters based on performance outcomes.
+
+        Args:
+            performance_delta: Difference between expected and actual performance (-1 to 1)
+            perceived_effort: Subjective effort rating (1-10)
+            fatigue_level: Current fatigue level (1-10)
+        """
+        if not self.enable_adaptive:
+            return
+
+        db = get_db()
+        with db.get_session() as session:
+            params = session.query(AdaptiveModelParameters).filter_by(user_id=self.user_id).first()
+
+            if not params:
+                return
+
+            # Adaptation logic based on performance feedback
+            adaptation_rate = config.ADAPTATION_RATE
+
+            # If underperforming with high effort -> slower recovery
+            if performance_delta < -0.2 and perceived_effort > 7:
+                # Increase fatigue decay time (slower recovery)
+                params.fatigue_decay = min(
+                    params.fatigue_decay * (1 + adaptation_rate),
+                    config.MAX_FATIGUE_DECAY
+                )
+                params.overtraining_incidents += 1
+
+            # If overperforming with low effort -> faster adaptation
+            elif performance_delta > 0.2 and perceived_effort < 5:
+                # Decrease fitness decay time (better fitness retention)
+                params.fitness_decay = max(
+                    params.fitness_decay * (1 - adaptation_rate * 0.5),
+                    config.MIN_FITNESS_DECAY
+                )
+
+            # If consistently fatigued -> adjust fatigue magnitude
+            if fatigue_level > 7:
+                params.fatigue_magnitude = min(
+                    params.fatigue_magnitude * (1 + adaptation_rate * 0.3),
+                    0.3  # Cap fatigue magnitude
+                )
+
+            # If never fatigued -> may need more load
+            elif fatigue_level < 3 and performance_delta > 0:
+                params.fatigue_magnitude = max(
+                    params.fatigue_magnitude * (1 - adaptation_rate * 0.3),
+                    0.05  # Minimum fatigue magnitude
+                )
+                params.undertraining_incidents += 1
+
+            # Update parameters
+            params.total_adaptations += 1
+            params.last_adaptation = datetime.utcnow()
+            params.recent_performance_trend = performance_delta
+
+            # Update confidence based on consistency
+            if abs(performance_delta) < 0.1:
+                params.adaptation_confidence = min(params.adaptation_confidence * 1.05, 1.0)
+            else:
+                params.adaptation_confidence = max(params.adaptation_confidence * 0.95, 0.3)
+
+            session.commit()
+
+            # Update local parameters
+            self.fitness_decay = params.fitness_decay
+            self.fatigue_decay = params.fatigue_decay
+            self.fitness_magnitude = params.fitness_magnitude
+            self.fatigue_magnitude = params.fatigue_magnitude
+
 
 class SupercompensationAnalyzer:
     """Analyze training data using supercompensation principles."""
@@ -120,7 +233,7 @@ class SupercompensationAnalyzer:
     def __init__(self, user_id: str = "default"):
         self.user_id = user_id
         self.db = get_db()
-        self.model = BanisterModel()
+        self.model = BanisterModel(user_id=user_id, enable_adaptive=config.ENABLE_ADAPTIVE_PARAMETERS)
         self._load_model_state()
 
     def _load_model_state(self):
@@ -166,8 +279,12 @@ class SupercompensationAnalyzer:
                 # Use the date as a pandas Timestamp for consistent indexing
                 activity_date = pd.Timestamp(activity.start_date.date())
                 if activity.training_load:
+                    # Apply sport-specific load multiplier
+                    sport_multiplier = config.get_sport_load_multiplier(activity.type)
+                    adjusted_load = activity.training_load * sport_multiplier
+
                     if activity_date in daily_loads.index:
-                        daily_loads[activity_date] += activity.training_load
+                        daily_loads[activity_date] += adjusted_load
 
         # Calculate fitness, fatigue, and form
         days = np.arange(len(daily_loads))
@@ -281,3 +398,82 @@ class SupercompensationAnalyzer:
                 }
                 for m in metrics
             ]
+
+    def track_performance_outcome(
+        self,
+        activity_id: str,
+        recommended_type: str,
+        recommended_load: float,
+        perceived_effort: float,
+        performance_quality: float = None,
+        notes: str = None
+    ):
+        """Track performance outcome for model adaptation.
+
+        Args:
+            activity_id: Strava activity ID
+            recommended_type: What was recommended (REST, EASY, etc.)
+            recommended_load: Recommended training load
+            perceived_effort: RPE 1-10
+            performance_quality: Subjective quality 1-10
+            notes: Optional notes about the session
+        """
+        with self.db.get_session() as session:
+            # Get the activity
+            activity = session.query(Activity).filter_by(strava_id=activity_id).first()
+            if not activity:
+                return
+
+            # Get current model state
+            current_state = self.get_current_state()
+
+            # Calculate performance delta
+            expected_load = recommended_load
+            actual_load = activity.training_load * config.get_sport_load_multiplier(activity.type)
+            load_compliance = 1.0 - abs(expected_load - actual_load) / (expected_load + 1e-5)
+
+            # Estimate outcome score
+            outcome_score = 0.5  # Neutral default
+            if performance_quality:
+                outcome_score = performance_quality / 10.0
+            elif perceived_effort:
+                # Infer from effort vs intensity
+                if recommended_type in ["EASY", "RECOVERY"] and perceived_effort <= 4:
+                    outcome_score = 0.8
+                elif recommended_type in ["MODERATE"] and 4 <= perceived_effort <= 6:
+                    outcome_score = 0.8
+                elif recommended_type in ["HARD", "PEAK"] and perceived_effort >= 7:
+                    outcome_score = 0.8
+                else:
+                    outcome_score = 0.4
+
+            # Create performance outcome record
+            outcome = PerformanceOutcome(
+                user_id=self.user_id,
+                activity_id=activity_id,
+                date=activity.start_date,
+                recommended_type=recommended_type,
+                recommended_load=recommended_load,
+                actual_type=activity.type,
+                actual_load=actual_load,
+                actual_sport=activity.type,
+                perceived_effort=perceived_effort,
+                performance_quality=performance_quality,
+                compliance_score=load_compliance,
+                outcome_score=outcome_score,
+                fitness_at_recommendation=current_state.get("fitness", 0),
+                fatigue_at_recommendation=current_state.get("fatigue", 0),
+                form_at_recommendation=current_state.get("form", 0),
+                notes=notes
+            )
+            session.add(outcome)
+            session.commit()
+
+            # Adapt model parameters if enabled
+            if config.ENABLE_ADAPTIVE_PARAMETERS:
+                performance_delta = outcome_score - 0.7  # Expected good outcome is 0.7
+                self.model.adapt_parameters(
+                    performance_delta=performance_delta,
+                    perceived_effort=perceived_effort,
+                    fatigue_level=current_state.get("fatigue", 0) / 10.0  # Normalize to 1-10
+                )

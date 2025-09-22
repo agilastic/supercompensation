@@ -266,3 +266,80 @@ class WellnessData(Base):
 
     def __repr__(self):
         return f"<WellnessData(date={self.date}, stress_avg={self.stress_avg}, steps={self.total_steps})>"
+
+
+class PeriodizationState(Base):
+    """Track current periodization cycle and phase."""
+
+    __tablename__ = "periodization_state"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(String(50), default="default", unique=True)
+
+    # Current cycle information
+    cycle_start_date = Column(DateTime, nullable=False)  # When current cycle started
+    cycle_length_weeks = Column(Integer, default=4)  # Total cycle length (e.g., 4 weeks for 3:1)
+    current_week = Column(Integer, nullable=False)  # Current week in cycle (1-based)
+    current_phase = Column(String(50), nullable=False)  # BUILD, PEAK, RECOVERY, etc.
+
+    # Phase progression within cycle
+    build_weeks = Column(Integer, default=3)  # Number of build weeks in cycle
+    recovery_weeks = Column(Integer, default=1)  # Number of recovery weeks in cycle
+
+    # Goal-oriented periodization (optional)
+    goal_event_date = Column(DateTime)  # Target race/event date
+    goal_type = Column(String(100))  # Type of goal (5k, marathon, century, etc.)
+    weeks_to_goal = Column(Integer)  # Weeks remaining to goal
+
+    # Training phase distribution (for longer-term planning)
+    base_phase_end = Column(DateTime)  # When base phase ends
+    build_phase_end = Column(DateTime)  # When build phase ends
+    peak_phase_end = Column(DateTime)  # When peak phase ends
+    taper_phase_end = Column(DateTime)  # When taper phase ends
+
+    # Periodization model settings
+    periodization_type = Column(String(50), default="undulating")  # linear, undulating, block, polarized
+    auto_progression = Column(Boolean, default=True)  # Auto-advance phases
+
+    # Performance tracking
+    baseline_fitness = Column(Float)  # Fitness at cycle start
+    target_fitness = Column(Float)  # Target fitness for cycle
+    performance_trend = Column(String(50))  # improving, maintaining, declining
+
+    # Metadata
+    notes = Column(Text)  # User notes about current phase
+    last_phase_change = Column(DateTime)  # When phase last changed
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def get_current_cycle_day(self) -> int:
+        """Get current day within the cycle (0-based)."""
+        if not self.cycle_start_date:
+            return 0
+        days_elapsed = (datetime.utcnow() - self.cycle_start_date).days
+        cycle_length_days = self.cycle_length_weeks * 7
+        return days_elapsed % cycle_length_days
+
+    def get_days_in_current_week(self) -> int:
+        """Get days elapsed in current week (0-6)."""
+        return self.get_current_cycle_day() % 7
+
+    def should_advance_week(self) -> bool:
+        """Check if we should advance to next week."""
+        cycle_day = self.get_current_cycle_day()
+        expected_week = (cycle_day // 7) + 1
+        return expected_week > self.current_week
+
+    def should_advance_cycle(self) -> bool:
+        """Check if we should start a new cycle."""
+        return self.get_current_cycle_day() >= (self.cycle_length_weeks * 7)
+
+    def get_current_phase_type(self) -> str:
+        """Determine current phase based on week in cycle."""
+        if self.current_week <= self.build_weeks:
+            return "BUILD" if self.current_week < self.build_weeks else "PEAK"
+        else:
+            return "RECOVERY"
+
+    def __repr__(self):
+        return f"<PeriodizationState(user_id={self.user_id}, week={self.current_week}, phase={self.current_phase})>"

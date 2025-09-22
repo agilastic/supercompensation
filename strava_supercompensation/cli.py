@@ -356,7 +356,7 @@ def recommend():
                 table.add_column("Activity", style="blue", width=26)
                 table.add_column("2nd Session", style="green", width=28)
                 table.add_column("Load", style="magenta", width=4)
-                table.add_column("Form", style="cyan", width=4)
+                table.add_column("Form", style="cyan", width=6)
 
                 # For 30-day plan, add week separators
                 current_week = -1
@@ -374,7 +374,7 @@ def recommend():
                             "[dim]──────────────────────[/dim]",
                             "[dim]────────────────────────[/dim]",
                             "[dim]────[/dim]",
-                            "[dim]────[/dim]"
+                            "[dim]──────[/dim]"
                         )
 
                     # Color code recommendations

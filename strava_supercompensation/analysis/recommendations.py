@@ -6,7 +6,7 @@ from typing import Dict, List, Optional, Tuple, Tuple
 
 from ..config import config
 from ..db import get_db
-from ..db.models import Metric, Activity
+from ..db.models import Metric, Activity, PeriodizationState
 from .multisport_metrics import MultiSportCalculator
 from .garmin_scores_analyzer import get_garmin_scores_analyzer
 from .hrv_baseline_analyzer import get_hrv_baseline_analyzer
@@ -757,16 +757,22 @@ class RecommendationEngine:
         # Check if already trained today (for day 0) and get recent activities
         today_activities = None
         recent_activities = []
+        periodization_state = None
+
         if self.db:
             with self.db.get_session() as session:
                 today_activities = self._get_today_activities(session)
                 recent_activities = self._get_recent_activities(session, days=7)
 
+            # Update and get current periodization state
+            periodization_state = self.update_periodization_state()
+
         # Generate training plan
         for day in range(days):
-            # Decay fitness and fatigue
-            fitness *= 0.98  # Approximate daily decay
-            fatigue *= 0.90  # Faster fatigue decay
+            # Apply daily decay first (except for day 0)
+            if day > 0:
+                fitness *= 0.98  # Approximate daily decay
+                fatigue *= 0.90  # Faster fatigue decay
 
             form = fitness - fatigue
 
@@ -784,12 +790,15 @@ class RecommendationEngine:
                     rec_type = TrainingRecommendation.RECOVERY.value
                     load = 20
             else:
-                # Determine training type based on periodization pattern
-                rec_type, load = self._get_periodized_recommendation(day, form, fatigue, fitness)
+                # Determine training type based on periodization state
+                if periodization_state:
+                    rec_type, load = self._get_periodized_recommendation_with_state(day, form, fatigue, fitness, periodization_state)
+                else:
+                    # Fallback to old method if no state available
+                    rec_type, load = self._get_periodized_recommendation(day, form, fatigue, fitness)
 
-            # Update state for next day
-            fitness += load * config.FITNESS_MAGNITUDE / config.FITNESS_DECAY_RATE
-            fatigue += load * config.FATIGUE_MAGNITUDE / config.FATIGUE_DECAY_RATE
+            # Store current form for display
+            current_form = form
 
             # Get sport-specific activity for this day
             if day == 0 and today_activities:
@@ -807,7 +816,7 @@ class RecommendationEngine:
                 "activity_rationale": sport_rec["rationale"],
                 "alternative_activities": sport_rec["alternatives"],
                 "suggested_load": load,
-                "predicted_form": round(form, 1),
+                "predicted_form": round(current_form, 1),
             }
 
             # Add double session fields if present
@@ -817,6 +826,10 @@ class RecommendationEngine:
                 plan_entry["double_rationale"] = sport_rec["double_rationale"]
 
             recommendations.append(plan_entry)
+
+            # Apply training load for next day's calculation
+            fitness += load * config.FITNESS_MAGNITUDE / config.FITNESS_DECAY_RATE
+            fatigue += load * config.FATIGUE_MAGNITUDE / config.FATIGUE_DECAY_RATE
 
         return recommendations
 
@@ -1515,3 +1528,163 @@ class RecommendationEngine:
                 air_quality_index=45,
                 wind_speed_ms=3.0
             )
+
+    def get_or_create_periodization_state(self, user_id: str = "default") -> PeriodizationState:
+        """Get or create periodization state for user."""
+        if not self.db:
+            # Initialize a default state if no database
+            state = PeriodizationState()
+            state.user_id = user_id
+            state.cycle_start_date = datetime.now(timezone.utc)
+            state.current_week = 1
+            state.current_phase = "BUILD"
+            return state
+
+        with self.db.get_session() as session:
+            state = session.query(PeriodizationState).filter_by(user_id=user_id).first()
+
+            if not state:
+                # Create new periodization state
+                state = PeriodizationState(
+                    user_id=user_id,
+                    cycle_start_date=datetime.now(timezone.utc),
+                    current_week=1,
+                    current_phase="BUILD",
+                    cycle_length_weeks=4,
+                    build_weeks=3,
+                    recovery_weeks=1,
+                    baseline_fitness=self._get_current_fitness(),
+                    auto_progression=True
+                )
+                session.add(state)
+                session.commit()
+                session.refresh(state)
+                # Detach the object from session to avoid "not bound to a Session" errors
+                session.expunge(state)
+
+            return state
+
+    def update_periodization_state(self, user_id: str = "default") -> PeriodizationState:
+        """Update periodization state based on current date and training."""
+        if not self.db:
+            return self.get_or_create_periodization_state(user_id)
+
+        with self.db.get_session() as session:
+            state = session.query(PeriodizationState).filter_by(user_id=user_id).first()
+
+            if not state:
+                return self.get_or_create_periodization_state(user_id)
+
+            # Check if we need to advance week or cycle
+            if state.should_advance_cycle():
+                # Start new cycle
+                state.cycle_start_date = datetime.now(timezone.utc)
+                state.current_week = 1
+                state.current_phase = "BUILD"
+                state.baseline_fitness = self._get_current_fitness()
+                state.last_phase_change = datetime.now(timezone.utc)
+
+            elif state.should_advance_week():
+                # Advance to next week
+                state.current_week += 1
+                old_phase = state.current_phase
+                state.current_phase = state.get_current_phase_type()
+
+                if old_phase != state.current_phase:
+                    state.last_phase_change = datetime.now(timezone.utc)
+
+            # Always update the phase to ensure it's correct
+            state.current_phase = state.get_current_phase_type()
+            state.updated_at = datetime.now(timezone.utc)
+
+            session.commit()
+            session.refresh(state)
+            # Detach the object from session to avoid "not bound to a Session" errors
+            session.expunge(state)
+            return state
+
+    def _get_periodized_recommendation_with_state(self, day: int, form: float, fatigue: float, fitness: float,
+                                                periodization_state: PeriodizationState) -> Tuple[str, int]:
+        """
+        Generate periodized training recommendation using actual periodization state.
+        This replaces the simple mathematical cycle with real phase tracking.
+        """
+        # Calculate which day in the actual cycle we're looking at
+        actual_cycle_day = periodization_state.get_current_cycle_day() + day
+        actual_week = (actual_cycle_day // 7) + 1
+        day_of_week = actual_cycle_day % 7
+
+        # Determine phase based on actual state, not mathematical cycle
+        if actual_week <= periodization_state.build_weeks:
+            current_phase = "BUILD"
+            week_mult = 1.0 + (actual_week - 1) * 0.1  # Progressive loading
+        elif actual_week == periodization_state.build_weeks + 1:
+            current_phase = "PEAK"
+            week_mult = 1.2  # Peak intensity
+        else:
+            current_phase = "RECOVERY"
+            week_mult = 0.6  # Recovery week
+
+        # Base training pattern (modified by form and fatigue)
+        fatigue_ratio = fatigue / (fitness + 1e-5)
+
+        # High fatigue = reduce intensity regardless of planned phase
+        if fatigue_ratio > 0.8:
+            if day_of_week in [0, 6]:  # Weekend
+                return TrainingRecommendation.REST.value, 0
+            else:
+                return TrainingRecommendation.RECOVERY.value, int(20 * week_mult)
+
+        # Phase-specific recommendations
+        if current_phase == "BUILD":
+            # Build phase: progressive loading
+            if day_of_week in [0, 6]:  # Weekend rest or easy
+                if form > 5:
+                    return TrainingRecommendation.EASY.value, int(50 * week_mult)
+                else:
+                    return TrainingRecommendation.RECOVERY.value, int(30 * week_mult)
+            elif day_of_week in [1, 4]:  # Quality days
+                if form > 0:
+                    return TrainingRecommendation.MODERATE.value, int(60 * week_mult)
+                else:
+                    return TrainingRecommendation.EASY.value, int(40 * week_mult)
+            elif day_of_week in [2, 5]:  # Hard days
+                if form > 5:
+                    return TrainingRecommendation.PEAK.value, int(120 * week_mult)
+                else:
+                    return TrainingRecommendation.MODERATE.value, int(60 * week_mult)
+            else:  # Recovery days
+                return TrainingRecommendation.EASY.value, int(40 * week_mult)
+
+        elif current_phase == "PEAK":
+            # Peak phase: high intensity, moderate volume
+            if day_of_week in [0, 6]:  # Weekend
+                return TrainingRecommendation.MODERATE.value, int(80 * week_mult)
+            elif day_of_week in [1, 3, 5]:  # Quality days
+                if form > 0:
+                    return TrainingRecommendation.PEAK.value, int(120 * week_mult)
+                else:
+                    return TrainingRecommendation.MODERATE.value, int(70 * week_mult)
+            else:  # Recovery days
+                return TrainingRecommendation.EASY.value, int(50 * week_mult)
+
+        else:  # RECOVERY phase
+            # Recovery phase: low intensity, allow supercompensation
+            if day_of_week in [0, 6]:  # Weekend
+                return TrainingRecommendation.RECOVERY.value, int(30 * week_mult)
+            elif day_of_week in [1, 3, 5]:  # Light training
+                return TrainingRecommendation.EASY.value, int(40 * week_mult)
+            else:  # Very easy days
+                return TrainingRecommendation.RECOVERY.value, int(25 * week_mult)
+
+    def _get_current_fitness(self) -> float:
+        """Get current fitness level for periodization tracking."""
+        if not self.db:
+            return 70.0  # Default fitness level
+
+        try:
+            with self.db.get_session() as session:
+                latest_metric = session.query(Metric).order_by(Metric.date.desc()).first()
+                return latest_metric.fitness if latest_metric else 70.0
+        except Exception:
+            return 70.0

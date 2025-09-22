@@ -63,6 +63,36 @@ class GarminPersonalClient:
                 raise GarminPersonalError("MFA_REQUIRED")
             raise GarminPersonalError(f"Login failed: {str(e)}")
 
+    def _get_existing_data_dates(self, start_date: datetime.date, end_date: datetime.date, data_type: str) -> set:
+        """Get dates that already have data in the database for the given range.
+
+        Args:
+            start_date: Start date of the range
+            end_date: End date of the range
+            data_type: Type of data ('hrv', 'sleep', 'wellness')
+
+        Returns:
+            Set of dates that already have data
+        """
+        with self.db.get_session() as session:
+            if data_type == 'hrv':
+                model = HRVData
+            elif data_type == 'sleep':
+                model = SleepData
+            elif data_type == 'wellness':
+                model = WellnessData
+            else:
+                return set()
+
+            existing_records = session.query(model.date).filter(
+                model.user_id == self.user_id,
+                model.date >= datetime.combine(start_date, datetime.min.time()),
+                model.date <= datetime.combine(end_date, datetime.min.time())
+            ).all()
+
+            # Convert to set of dates
+            return {record.date.date() for record in existing_records}
+
     def sync_essential_data(self, days: int = 7) -> Dict[str, int]:
         """Sync only essential HRV and sleep data for specified days.
 
@@ -78,10 +108,18 @@ class GarminPersonalClient:
         end_date = datetime.now().date()
         start_date = end_date - timedelta(days=days)
 
+        # Check for existing data to skip API calls
+        existing_hrv_dates = self._get_existing_data_dates(start_date, end_date, 'hrv')
+        existing_sleep_dates = self._get_existing_data_dates(start_date, end_date, 'sleep')
+        existing_wellness_dates = self._get_existing_data_dates(start_date, end_date, 'wellness')
+
         results = {
             "hrv_synced": 0,
             "sleep_synced": 0,
             "wellness_synced": 0,
+            "hrv_skipped": len(existing_hrv_dates),
+            "sleep_skipped": len(existing_sleep_dates),
+            "wellness_skipped": len(existing_wellness_dates),
             "errors": 0,
             "date_range": f"{start_date} to {end_date}"
         }
@@ -92,17 +130,20 @@ class GarminPersonalClient:
             try:
                 date_str = current_date.strftime('%Y-%m-%d')
 
-                # Get HRV data
-                if self._sync_hrv_for_date(current_date):
-                    results["hrv_synced"] += 1
+                # Get HRV data (skip if already exists)
+                if current_date not in existing_hrv_dates:
+                    if self._sync_hrv_for_date(current_date):
+                        results["hrv_synced"] += 1
 
-                # Get sleep data
-                if self._sync_sleep_for_date(current_date):
-                    results["sleep_synced"] += 1
+                # Get sleep data (skip if already exists)
+                if current_date not in existing_sleep_dates:
+                    if self._sync_sleep_for_date(current_date):
+                        results["sleep_synced"] += 1
 
-                # Get basic wellness data
-                if self._sync_wellness_for_date(current_date):
-                    results["wellness_synced"] += 1
+                # Get basic wellness data (skip if already exists)
+                if current_date not in existing_wellness_dates:
+                    if self._sync_wellness_for_date(current_date):
+                        results["wellness_synced"] += 1
 
             except GarminConnectTooManyRequestsError:
                 print(f"Rate limited at {current_date}. Stopping sync.")

@@ -362,9 +362,10 @@ def recommend():
                 table = Table(title=title, box=box.ROUNDED)
                 table.add_column("Day", style="cyan", width=3)
                 table.add_column("Date", style="white", width=8)
+                table.add_column("Week Type", style="bright_blue", width=10)
                 table.add_column("Intensity", style="yellow", width=8)
-                table.add_column("Activity", style="blue", width=26)
-                table.add_column("2nd Session", style="green", width=28)
+                table.add_column("Activity", style="blue", width=24)
+                table.add_column("2nd Session", style="green", width=29)
                 table.add_column("Load", style="magenta", width=4)
                 table.add_column("Form", style="cyan", width=6)
 
@@ -377,12 +378,35 @@ def recommend():
                     if days == 30 and week_num != current_week:
                         current_week = week_num
                         table.add_section()
+                        # Define week types based on sports science periodization
+                        week_types = {
+                            0: "BUILD 1", 1: "BUILD 2", 2: "BUILD 3", 3: "RECOVERY",  # Weeks 1-4
+                            4: "BUILD 1", 5: "BUILD 2", 6: "BUILD 3", 7: "RECOVERY",  # Weeks 5-8
+                            8: "BUILD 1", 9: "BUILD 2", 10: "BUILD 3", 11: "RECOVERY", # Weeks 9-12
+                            12: "PEAK 1", 13: "PEAK 2", 14: "TAPER 1", 15: "TAPER 2"   # Weeks 13-16
+                        }
+                        # For longer plans, extend the pattern
+                        if week_num not in week_types:
+                            cycle_week = week_num % 4
+                            if cycle_week < 3:
+                                week_types[week_num] = f"BUILD {cycle_week + 1}"
+                            else:
+                                week_types[week_num] = "RECOVERY"
+
+                        week_type = week_types.get(week_num, "MAINTENANCE")
+                        week_type_color = {
+                            "BUILD 1": "bright_green", "BUILD 2": "green", "BUILD 3": "yellow",
+                            "RECOVERY": "bright_cyan", "PEAK 1": "bright_red", "PEAK 2": "red",
+                            "TAPER 1": "magenta", "TAPER 2": "bright_magenta", "MAINTENANCE": "white"
+                        }.get(week_type, "white")
+
                         table.add_row(
                             f"[bold]W{week_num+1}[/bold]",
                             "[dim]────────[/dim]",
+                            f"[{week_type_color}]{week_type}[/{week_type_color}]",
                             "[dim]────────[/dim]",
-                            "[dim]──────────────────────[/dim]",
-                            "[dim]────────────────────────[/dim]",
+                            "[dim]────────────────────[/dim]",
+                            "[dim]─────────────────────────[/dim]",
                             "[dim]────[/dim]",
                             "[dim]──────[/dim]"
                         )
@@ -398,17 +422,39 @@ def recommend():
                     }
                     rec_color = rec_colors.get(plan['recommendation'], "white")
 
+                    # Get week type for this day
+                    week_types = {
+                        0: "BUILD 1", 1: "BUILD 2", 2: "BUILD 3", 3: "RECOVERY",  # Weeks 1-4
+                        4: "BUILD 1", 5: "BUILD 2", 6: "BUILD 3", 7: "RECOVERY",  # Weeks 5-8
+                        8: "BUILD 1", 9: "BUILD 2", 10: "BUILD 3", 11: "RECOVERY", # Weeks 9-12
+                        12: "PEAK 1", 13: "PEAK 2", 14: "TAPER 1", 15: "TAPER 2"   # Weeks 13-16
+                    }
+                    # For longer plans, extend the pattern
+                    if week_num not in week_types:
+                        cycle_week = week_num % 4
+                        if cycle_week < 3:
+                            week_types[week_num] = f"BUILD {cycle_week + 1}"
+                        else:
+                            week_types[week_num] = "RECOVERY"
+
+                    week_type = week_types.get(week_num, "MAINTENANCE")
+                    week_type_color = {
+                        "BUILD 1": "bright_green", "BUILD 2": "green", "BUILD 3": "yellow",
+                        "RECOVERY": "bright_cyan", "PEAK 1": "bright_red", "PEAK 2": "red",
+                        "TAPER 1": "magenta", "TAPER 2": "bright_magenta", "MAINTENANCE": "white"
+                    }.get(week_type, "white")
+
                     # Get activity name
                     activity = plan.get('activity', 'Unknown')
-                    if len(activity) > 26:
-                        activity = activity[:23] + "..."
+                    if len(activity) > 24:
+                        activity = activity[:21] + "..."
 
                     # Get second session info
                     second_session = ""
                     if plan.get('second_activity'):
                         second_activity = plan['second_activity']
-                        if len(second_activity) > 28:
-                            second_session = second_activity[:25] + "..."
+                        if len(second_activity) > 26:
+                            second_session = second_activity[:23] + "..."
                         else:
                             second_session = second_activity
                     else:
@@ -422,6 +468,7 @@ def recommend():
                     table.add_row(
                         str(plan['day']),
                         date_str,
+                        f"[{week_type_color}]{week_type}[/{week_type_color}]",
                         f"[{rec_color}]{plan['recommendation']}[/{rec_color}]",
                         f"[blue]{activity}[/blue]",
                         f"[green]{second_session}[/green]" if plan.get('second_activity') else f"[dim]{second_session}[/dim]",
@@ -945,15 +992,20 @@ def sync(days):
         # Display results
         table = Table(title="Sync Results", box=box.ROUNDED)
         table.add_column("Data Type", style="cyan")
-        table.add_column("Records Synced", style="green")
+        table.add_column("New/Updated", style="green")
+        table.add_column("Skipped", style="yellow")
         table.add_column("Status", style="magenta")
 
-        table.add_row("HRV Data", str(results["hrv_synced"]), "[green]Success[/green]")
-        table.add_row("Sleep Data", str(results["sleep_synced"]), "[green]Success[/green]")
-        table.add_row("Wellness Data", str(results["wellness_synced"]), "[green]Success[/green]")
+        hrv_skipped = results.get("hrv_skipped", 0)
+        sleep_skipped = results.get("sleep_skipped", 0)
+        wellness_skipped = results.get("wellness_skipped", 0)
+
+        table.add_row("HRV Data", str(results["hrv_synced"]), str(hrv_skipped), "[green]Success[/green]")
+        table.add_row("Sleep Data", str(results["sleep_synced"]), str(sleep_skipped), "[green]Success[/green]")
+        table.add_row("Wellness Data", str(results["wellness_synced"]), str(wellness_skipped), "[green]Success[/green]")
 
         if results["errors"] > 0:
-            table.add_row("Errors", str(results["errors"]), "[red]Failed[/red]")
+            table.add_row("Errors", str(results["errors"]), "—", "[red]Failed[/red]")
 
         console.print(table)
 
@@ -1132,15 +1184,20 @@ def sync_mfa(days, code):
         # Display results
         table = Table(title="MFA Sync Results", box=box.ROUNDED)
         table.add_column("Data Type", style="cyan")
-        table.add_column("Records Synced", style="green")
+        table.add_column("New/Updated", style="green")
+        table.add_column("Skipped", style="yellow")
         table.add_column("Status", style="magenta")
 
-        table.add_row("HRV Data", str(results["hrv_synced"]), "[green]Success[/green]")
-        table.add_row("Sleep Data", str(results["sleep_synced"]), "[green]Success[/green]")
-        table.add_row("Wellness Data", str(results["wellness_synced"]), "[green]Success[/green]")
+        hrv_skipped = results.get("hrv_skipped", 0)
+        sleep_skipped = results.get("sleep_skipped", 0)
+        wellness_skipped = results.get("wellness_skipped", 0)
+
+        table.add_row("HRV Data", str(results["hrv_synced"]), str(hrv_skipped), "[green]Success[/green]")
+        table.add_row("Sleep Data", str(results["sleep_synced"]), str(sleep_skipped), "[green]Success[/green]")
+        table.add_row("Wellness Data", str(results["wellness_synced"]), str(wellness_skipped), "[green]Success[/green]")
 
         if results["errors"] > 0:
-            table.add_row("Errors", str(results["errors"]), "[red]Failed[/red]")
+            table.add_row("Errors", str(results["errors"]), "—", "[red]Failed[/red]")
 
         console.print(table)
 
@@ -1282,9 +1339,10 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
             table = Table(title=title, box=box.ROUNDED)
             table.add_column("Day", style="cyan", width=3)
             table.add_column("Date", style="white", width=8)
+            table.add_column("Week Type", style="bright_blue", width=10)
             table.add_column("Intensity", style="yellow", width=8)
-            table.add_column("Activity", style="blue", width=26)
-            table.add_column("2nd Session", style="green", width=28)
+            table.add_column("Activity", style="blue", width=24)
+            table.add_column("2nd Session", style="green", width=26)
             table.add_column("Load", style="magenta", width=4)
             table.add_column("Form", style="cyan", width=6)
 
@@ -1297,12 +1355,36 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
                 if plan_days == 30 and week_num != current_week:
                     current_week = week_num
                     table.add_section()
+
+                    # Define week types based on sports science periodization
+                    week_types = {
+                        0: "BUILD 1", 1: "BUILD 2", 2: "BUILD 3", 3: "RECOVERY",  # Weeks 1-4
+                        4: "BUILD 1", 5: "BUILD 2", 6: "BUILD 3", 7: "RECOVERY",  # Weeks 5-8
+                        8: "BUILD 1", 9: "BUILD 2", 10: "BUILD 3", 11: "RECOVERY", # Weeks 9-12
+                        12: "PEAK 1", 13: "PEAK 2", 14: "TAPER 1", 15: "TAPER 2"   # Weeks 13-16
+                    }
+                    # For longer plans, extend the pattern
+                    if week_num not in week_types:
+                        cycle_week = week_num % 4
+                        if cycle_week < 3:
+                            week_types[week_num] = f"BUILD {cycle_week + 1}"
+                        else:
+                            week_types[week_num] = "RECOVERY"
+
+                    week_type = week_types.get(week_num, "MAINTENANCE")
+                    week_type_color = {
+                        "BUILD 1": "bright_green", "BUILD 2": "green", "BUILD 3": "yellow",
+                        "RECOVERY": "bright_cyan", "PEAK 1": "bright_red", "PEAK 2": "red",
+                        "TAPER 1": "magenta", "TAPER 2": "bright_magenta", "MAINTENANCE": "white"
+                    }.get(week_type, "white")
+
                     table.add_row(
                         f"[bold]W{week_num+1}[/bold]",
                         "[dim]────────[/dim]",
+                        f"[{week_type_color}]{week_type}[/{week_type_color}]",
                         "[dim]────────[/dim]",
-                        "[dim]──────────────────────[/dim]",
-                        "[dim]────────────────────────[/dim]",
+                        "[dim]────────────────────[/dim]",
+                        "[dim]─────────────────────────[/dim]",
                         "[dim]────[/dim]",
                         "[dim]──────[/dim]"
                     )
@@ -1318,17 +1400,39 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
                 }
                 rec_color = rec_colors.get(plan['recommendation'], "white")
 
+                # Get week type for this day
+                week_types = {
+                    0: "BUILD 1", 1: "BUILD 2", 2: "BUILD 3", 3: "RECOVERY",  # Weeks 1-4
+                    4: "BUILD 1", 5: "BUILD 2", 6: "BUILD 3", 7: "RECOVERY",  # Weeks 5-8
+                    8: "BUILD 1", 9: "BUILD 2", 10: "BUILD 3", 11: "RECOVERY", # Weeks 9-12
+                    12: "PEAK 1", 13: "PEAK 2", 14: "TAPER 1", 15: "TAPER 2"   # Weeks 13-16
+                }
+                # For longer plans, extend the pattern
+                if week_num not in week_types:
+                    cycle_week = week_num % 4
+                    if cycle_week < 3:
+                        week_types[week_num] = f"BUILD {cycle_week + 1}"
+                    else:
+                        week_types[week_num] = "RECOVERY"
+
+                week_type = week_types.get(week_num, "MAINTENANCE")
+                week_type_color = {
+                    "BUILD 1": "bright_green", "BUILD 2": "green", "BUILD 3": "yellow",
+                    "RECOVERY": "bright_cyan", "PEAK 1": "bright_red", "PEAK 2": "red",
+                    "TAPER 1": "magenta", "TAPER 2": "bright_magenta", "MAINTENANCE": "white"
+                }.get(week_type, "white")
+
                 # Get activity name
                 activity = plan.get('activity', 'Unknown')
-                if len(activity) > 26:
-                    activity = activity[:23] + "..."
+                if len(activity) > 24:
+                    activity = activity[:21] + "..."
 
                 # Get second session info
                 second_session = ""
                 if plan.get('second_activity'):
                     second_activity = plan['second_activity']
-                    if len(second_activity) > 28:
-                        second_session = second_activity[:25] + "..."
+                    if len(second_activity) > 29:
+                        second_session = second_activity[:26] + "..."
                     else:
                         second_session = second_activity
                 else:
@@ -1342,6 +1446,7 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
                 table.add_row(
                     str(plan['day']),
                     date_str,
+                    f"[{week_type_color}]{week_type}[/{week_type_color}]",
                     f"[{rec_color}]{plan['recommendation']}[/{rec_color}]",
                     f"[blue]{activity}[/blue]",
                     f"[green]{second_session}[/green]" if plan.get('second_activity') else f"[dim]{second_session}[/dim]",

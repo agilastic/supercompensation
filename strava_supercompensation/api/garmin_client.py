@@ -42,12 +42,21 @@ class GarminClient:
             end_date = datetime.utcnow().date()
             start_date = end_date - timedelta(days=days)
 
+            # Check for existing data to skip API calls
+            existing_dates = self._get_existing_data_dates(start_date, end_date, 'hrv')
+
             synced_count = 0
             updated_count = 0
+            skipped_count = len(existing_dates)
 
             # Fetch HRV data day by day (Garmin API limitation)
             current_date = start_date
             while current_date <= end_date:
+                # Skip if data already exists for this date
+                if current_date in existing_dates:
+                    current_date += timedelta(days=1)
+                    continue
+
                 date_str = current_date.strftime('%Y-%m-%d')
 
                 # Get HRV data for the day
@@ -73,6 +82,7 @@ class GarminClient:
                 "type": "hrv",
                 "synced": synced_count,
                 "updated": updated_count,
+                "skipped": skipped_count,
                 "date_range": f"{start_date} to {end_date}"
             }
 
@@ -96,12 +106,21 @@ class GarminClient:
             end_date = datetime.utcnow().date()
             start_date = end_date - timedelta(days=days)
 
+            # Check for existing data to skip API calls
+            existing_dates = self._get_existing_data_dates(start_date, end_date, 'sleep')
+
             synced_count = 0
             updated_count = 0
+            skipped_count = len(existing_dates)
 
             # Fetch sleep data day by day
             current_date = start_date
             while current_date <= end_date:
+                # Skip if data already exists for this date
+                if current_date in existing_dates:
+                    current_date += timedelta(days=1)
+                    continue
+
                 date_str = current_date.strftime('%Y-%m-%d')
 
                 # Get sleep data for the day
@@ -128,6 +147,7 @@ class GarminClient:
                 "type": "sleep",
                 "synced": synced_count,
                 "updated": updated_count,
+                "skipped": skipped_count,
                 "date_range": f"{start_date} to {end_date}"
             }
 
@@ -151,12 +171,21 @@ class GarminClient:
             end_date = datetime.utcnow().date()
             start_date = end_date - timedelta(days=days)
 
+            # Check for existing data to skip API calls
+            existing_dates = self._get_existing_data_dates(start_date, end_date, 'wellness')
+
             synced_count = 0
             updated_count = 0
+            skipped_count = len(existing_dates)
 
             # Fetch wellness data day by day
             current_date = start_date
             while current_date <= end_date:
+                # Skip if data already exists for this date
+                if current_date in existing_dates:
+                    current_date += timedelta(days=1)
+                    continue
+
                 date_str = current_date.strftime('%Y-%m-%d')
 
                 # Get wellness summary for the day
@@ -183,6 +212,7 @@ class GarminClient:
                 "type": "wellness",
                 "synced": synced_count,
                 "updated": updated_count,
+                "skipped": skipped_count,
                 "date_range": f"{start_date} to {end_date}"
             }
 
@@ -240,6 +270,36 @@ class GarminClient:
             data.get("bodyBatteryChargedValue") or
             data.get("totalSteps")
         )
+
+    def _get_existing_data_dates(self, start_date: datetime.date, end_date: datetime.date, data_type: str) -> set:
+        """Get dates that already have data in the database for the given range.
+
+        Args:
+            start_date: Start date of the range
+            end_date: End date of the range
+            data_type: Type of data ('hrv', 'sleep', 'wellness')
+
+        Returns:
+            Set of dates that already have data
+        """
+        with self.db.get_session() as session:
+            if data_type == 'hrv':
+                model = HRVData
+            elif data_type == 'sleep':
+                model = SleepData
+            elif data_type == 'wellness':
+                model = WellnessData
+            else:
+                return set()
+
+            existing_records = session.query(model.date).filter(
+                model.user_id == self.user_id,
+                model.date >= datetime.combine(start_date, datetime.min.time()),
+                model.date <= datetime.combine(end_date, datetime.min.time())
+            ).all()
+
+            # Convert to set of dates
+            return {record.date.date() for record in existing_records}
 
     def _store_hrv_data(self, date: datetime.date, data: Dict) -> bool:
         """Store HRV data in database.

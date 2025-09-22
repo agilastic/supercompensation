@@ -103,3 +103,166 @@ class AuthToken(Base):
 
     def __repr__(self):
         return f"<AuthToken(user_id={self.user_id}, athlete_name={self.athlete_name})>"
+
+
+class GarminAuthToken(Base):
+    """Store Garmin OAuth1 tokens."""
+
+    __tablename__ = "garmin_auth_tokens"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(String(50), unique=True, nullable=False)
+    access_token = Column(Text, nullable=False)
+    access_token_secret = Column(Text, nullable=False)
+    consumer_key = Column(String(255))
+    consumer_secret = Column(String(255))
+    garmin_user_id = Column(String(50))
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def __repr__(self):
+        return f"<GarminAuthToken(user_id={self.user_id}, garmin_user_id={self.garmin_user_id})>"
+
+
+class HRVData(Base):
+    """Store Heart Rate Variability data from Garmin."""
+
+    __tablename__ = "hrv_data"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(String(50), default="default")
+    date = Column(DateTime, nullable=False)
+
+    # HRV Metrics
+    hrv_rmssd = Column(Float)  # Root Mean Square of Successive Differences (ms)
+    hrv_score = Column(Float)  # Garmin HRV Score (0-100)
+    hrv_status = Column(String(50))  # balanced, unbalanced, low, high
+
+    # Additional HRV metrics if available
+    stress_level = Column(Float)  # Stress level (0-100)
+    stress_qualifier = Column(String(50))  # low, medium, high, overreaching
+    recovery_advisor = Column(String(255))  # Recovery recommendations
+
+    # Raw data for analysis
+    baseline_low_upper = Column(Float)
+    baseline_balanced_lower = Column(Float)
+    baseline_balanced_upper = Column(Float)
+
+    # Metadata
+    measurement_timestamp = Column(DateTime)
+    raw_data = Column(Text)  # JSON string for full response
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    def __repr__(self):
+        return f"<HRVData(date={self.date}, hrv_score={self.hrv_score}, status={self.hrv_status})>"
+
+
+class SleepData(Base):
+    """Store sleep data from Garmin."""
+
+    __tablename__ = "sleep_data"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(String(50), default="default")
+    date = Column(DateTime, nullable=False)  # Sleep date (night of sleep)
+
+    # Sleep Duration
+    total_sleep_time = Column(Integer)  # Total sleep in seconds
+    deep_sleep_time = Column(Integer)  # Deep sleep in seconds
+    light_sleep_time = Column(Integer)  # Light sleep in seconds
+    rem_sleep_time = Column(Integer)  # REM sleep in seconds
+    awake_time = Column(Integer)  # Time awake in seconds
+
+    # Sleep Quality Metrics
+    sleep_score = Column(Float)  # Overall sleep score (0-100)
+    sleep_efficiency = Column(Float)  # Sleep efficiency percentage
+    sleep_latency = Column(Integer)  # Time to fall asleep (seconds)
+
+    # Sleep Timing
+    bedtime = Column(DateTime)  # When went to bed
+    sleep_start_time = Column(DateTime)  # When actually fell asleep
+    sleep_end_time = Column(DateTime)  # When woke up
+    wake_time = Column(DateTime)  # When got out of bed
+
+    # Additional Metrics
+    restlessness = Column(Float)  # Restlessness level
+    interruptions = Column(Integer)  # Number of sleep interruptions
+    average_heart_rate = Column(Float)  # Average HR during sleep
+    lowest_heart_rate = Column(Float)  # Lowest HR during sleep
+
+    # Sleep stages breakdown (percentages)
+    deep_sleep_pct = Column(Float)
+    light_sleep_pct = Column(Float)
+    rem_sleep_pct = Column(Float)
+    awake_pct = Column(Float)
+
+    # Recovery indicators
+    overnight_hrv = Column(Float)  # HRV during sleep
+    sleep_stress = Column(Float)  # Stress level during sleep
+    recovery_score = Column(Float)  # Recovery score from sleep
+
+    # Metadata
+    raw_data = Column(Text)  # JSON string for full response
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    def __repr__(self):
+        return f"<SleepData(date={self.date}, total_sleep={self.total_sleep_time/3600:.1f}h, score={self.sleep_score})>"
+
+
+class WellnessData(Base):
+    """Store daily wellness metrics from Garmin."""
+
+    __tablename__ = "wellness_data"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(String(50), default="default")
+    date = Column(DateTime, nullable=False)
+
+    # Stress Metrics
+    stress_avg = Column(Float)  # Average stress level (0-100)
+    stress_max = Column(Float)  # Maximum stress level
+    stress_qualifier = Column(String(50))  # low, medium, high, unknown
+    rest_stress_duration = Column(Integer)  # Time in rest stress (seconds)
+    low_stress_duration = Column(Integer)  # Time in low stress (seconds)
+    medium_stress_duration = Column(Integer)  # Time in medium stress (seconds)
+    high_stress_duration = Column(Integer)  # Time in high stress (seconds)
+    stress_duration = Column(Integer)  # Total stress monitoring time
+
+    # Body Battery (if available)
+    body_battery_charged = Column(Float)  # Body Battery charged
+    body_battery_drained = Column(Float)  # Body Battery drained
+    body_battery_highest = Column(Float)  # Highest Body Battery level
+    body_battery_lowest = Column(Float)  # Lowest Body Battery level
+
+    # Respiration
+    avg_respiration = Column(Float)  # Average respiration rate
+    max_respiration = Column(Float)  # Maximum respiration rate
+    min_respiration = Column(Float)  # Minimum respiration rate
+
+    # Pulse Ox (if available)
+    avg_spo2 = Column(Float)  # Average blood oxygen saturation
+    lowest_spo2 = Column(Float)  # Lowest SpO2 reading
+
+    # Steps and Activity
+    total_steps = Column(Integer)  # Total daily steps
+    goal_steps = Column(Integer)  # Step goal
+    calories_goal = Column(Float)  # Calorie goal
+    calories_bmr = Column(Float)  # BMR calories
+    calories_active = Column(Float)  # Active calories
+    calories_consumed = Column(Float)  # Total calories consumed
+
+    # Distance and Floors
+    total_distance = Column(Float)  # Total distance in meters
+    floors_ascended = Column(Float)  # Floors climbed
+    floors_descended = Column(Float)  # Floors descended
+
+    # Intensity Minutes
+    moderate_intensity_minutes = Column(Integer)
+    vigorous_intensity_minutes = Column(Integer)
+
+    # Metadata
+    raw_data = Column(Text)  # JSON string for full response
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    def __repr__(self):
+        return f"<WellnessData(date={self.date}, stress_avg={self.stress_avg}, steps={self.total_steps})>"

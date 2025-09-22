@@ -10,7 +10,9 @@ from rich import box
 
 from .config import config
 from .auth import AuthManager
+from .auth.garmin_oauth import get_garmin_auth, GarminOAuthError
 from .api import StravaClient
+from .api.garmin_client import get_garmin_client, GarminAPIError
 from .analysis import SupercompensationAnalyzer, RecommendationEngine
 from .analysis.multisport_metrics import MultiSportCalculator
 
@@ -365,6 +367,10 @@ def reset():
         auth_manager = AuthManager()
         auth_manager.logout()
 
+        # Clear Garmin authentication
+        garmin_auth = get_garmin_auth()
+        garmin_auth.revoke_tokens()
+
         # Reset database
         from .db import get_db
         db = get_db()
@@ -374,6 +380,292 @@ def reset():
         console.print("[green]✅ Application reset successfully![/green]")
     except Exception as e:
         console.print(f"[red]❌ Error resetting application: {e}[/red]")
+
+
+@cli.group()
+def garmin():
+    """Garmin Connect integration commands."""
+    pass
+
+
+@garmin.command()
+def auth():
+    """Authenticate with Garmin Connect."""
+    console.print(Panel.fit("🔐 Garmin Connect Authentication", style="bold blue"))
+
+    try:
+        garmin_auth = get_garmin_auth()
+
+        if garmin_auth.is_authenticated():
+            console.print("[green]✅ Already authenticated with Garmin![/green]")
+            if click.confirm("Do you want to re-authenticate?"):
+                garmin_auth.revoke_tokens()
+            else:
+                return
+
+        console.print("\n[cyan]Starting Garmin OAuth1 flow...[/cyan]")
+
+        # Step 1: Get authorization URL
+        auth_url, token_secret = garmin_auth.get_authorization_url()
+
+        console.print(f"\n[bold]1. Open this URL in your browser:[/bold]")
+        console.print(f"[link]{auth_url}[/link]")
+        console.print("\n[bold]2. Authorize the application[/bold]")
+        console.print("[bold]3. Copy the verification code from the page[/bold]")
+
+        # Step 2: Get verification code from user
+        oauth_token = auth_url.split("oauth_token=")[1].split("&")[0] if "oauth_token=" in auth_url else None
+        if not oauth_token:
+            console.print("[red]❌ Failed to extract oauth_token from URL[/red]")
+            return
+
+        verifier = click.prompt("\n[bold]Enter verification code", type=str).strip()
+
+        if not verifier:
+            console.print("[red]❌ Verification code is required[/red]")
+            return
+
+        # Step 3: Exchange for access token
+        with console.status("[cyan]Exchanging code for access token...[/cyan]"):
+            token_info = garmin_auth.exchange_code_for_token(oauth_token, token_secret, verifier)
+
+        console.print("[green]✅ Successfully authenticated with Garmin Connect![/green]")
+        console.print(f"[dim]User ID: {token_info.get('garmin_user_id')}[/dim]")
+        console.print(f"[dim]Display Name: {token_info.get('display_name')}[/dim]")
+
+    except GarminOAuthError as e:
+        console.print(f"[red]❌ Garmin authentication error: {e}[/red]")
+    except Exception as e:
+        console.print(f"[red]❌ Unexpected error: {e}[/red]")
+
+
+@garmin.command()
+def test():
+    """Test Garmin Connect API connection."""
+    console.print(Panel.fit("🧪 Testing Garmin Connection", style="bold blue"))
+
+    try:
+        garmin_auth = get_garmin_auth()
+
+        if not garmin_auth.is_authenticated():
+            console.print("[red]❌ Not authenticated with Garmin. Run 'garmin auth' first.[/red]")
+            return
+
+        with console.status("[cyan]Testing connection...[/cyan]"):
+            result = garmin_auth.test_connection()
+
+        if result["status"] == "success":
+            console.print("[green]✅ Connection successful![/green]")
+            console.print(f"[dim]User ID: {result.get('user_id')}[/dim]")
+            console.print(f"[dim]Display Name: {result.get('display_name')}[/dim]")
+            console.print(f"[dim]Email: {result.get('email')}[/dim]")
+        else:
+            console.print(f"[red]❌ Connection failed: {result.get('message')}[/red]")
+
+    except Exception as e:
+        console.print(f"[red]❌ Error testing connection: {e}[/red]")
+
+
+@garmin.command()
+@click.option("--days", default=30, help="Number of days to sync")
+@click.option("--type", "data_type", type=click.Choice(['hrv', 'sleep', 'wellness', 'all']), default='all', help="Type of data to sync")
+def sync(days, data_type):
+    """Sync wellness data from Garmin Connect."""
+    console.print(Panel.fit(f"🔄 Syncing Garmin Data ({data_type}, {days} days)", style="bold blue"))
+
+    try:
+        garmin_client = get_garmin_client()
+
+        # Check authentication
+        if not garmin_client.auth.is_authenticated():
+            console.print("[red]❌ Not authenticated with Garmin. Run 'garmin auth' first.[/red]")
+            return
+
+        # Sync requested data type
+        with console.status(f"[cyan]Syncing {data_type} data from Garmin...[/cyan]"):
+            if data_type == "hrv":
+                results = [garmin_client.sync_hrv_data(days)]
+            elif data_type == "sleep":
+                results = [garmin_client.sync_sleep_data(days)]
+            elif data_type == "wellness":
+                results = [garmin_client.sync_wellness_data(days)]
+            else:  # all
+                results = garmin_client.sync_all(days)
+
+        # Display results
+        table = Table(title="Sync Results", box=box.ROUNDED)
+        table.add_column("Data Type", style="cyan")
+        table.add_column("New Records", style="green")
+        table.add_column("Updated", style="yellow")
+        table.add_column("Date Range", style="white")
+        table.add_column("Status", style="magenta")
+
+        for result in results:
+            if "error" in result:
+                table.add_row(
+                    result["type"].title(),
+                    "N/A",
+                    "N/A",
+                    "N/A",
+                    f"[red]Error: {result['error'][:30]}...[/red]"
+                )
+            else:
+                table.add_row(
+                    result["type"].title(),
+                    str(result.get("synced", 0)),
+                    str(result.get("updated", 0)),
+                    result.get("date_range", "N/A"),
+                    "[green]Success[/green]"
+                )
+
+        console.print(table)
+
+        # Show quick stats
+        total_new = sum(r.get("synced", 0) for r in results if "error" not in r)
+        total_updated = sum(r.get("updated", 0) for r in results if "error" not in r)
+
+        if total_new > 0 or total_updated > 0:
+            console.print(f"\n[green]✅ Sync complete! {total_new} new records, {total_updated} updated[/green]")
+        else:
+            console.print(f"\n[yellow]ℹ️  No new data found[/yellow]")
+
+    except GarminAPIError as e:
+        console.print(f"[red]❌ Garmin API error: {e}[/red]")
+    except Exception as e:
+        console.print(f"[red]❌ Error syncing data: {e}[/red]")
+
+
+@garmin.command()
+@click.option("--days", default=7, help="Number of days to analyze")
+def wellness():
+    """Show wellness trends and insights."""
+    console.print(Panel.fit(f"🧘‍♀️ Wellness Analysis ({days} days)", style="bold blue"))
+
+    try:
+        garmin_client = get_garmin_client()
+
+        if not garmin_client.auth.is_authenticated():
+            console.print("[red]❌ Not authenticated with Garmin. Run 'garmin auth' first.[/red]")
+            return
+
+        # Get wellness trend
+        trend = garmin_client.get_wellness_trend(days)
+
+        if trend["status"] == "no_data":
+            console.print("[yellow]No wellness data found. Run 'garmin sync' first.[/yellow]")
+            return
+
+        # Display trend
+        avg_stress_str = f"{trend['avg_stress']:.0f}/100" if trend['avg_stress'] else 'N/A'
+        avg_sleep_str = f"{trend['avg_sleep_score']:.0f}/100" if trend['avg_sleep_score'] else 'N/A'
+
+        wellness_panel = Panel(
+            f"""
+[bold]Wellness Overview ({days} days)[/bold]
+
+[bold]🧠 Average Stress:[/bold] {avg_stress_str}
+[bold]😴 Average Sleep Score:[/bold] {avg_sleep_str}
+[bold]📈 Stress Trend:[/bold] {trend['stress_trend'].title()}
+
+[dim]Records analyzed: {trend['records_count']}[/dim]
+            """,
+            title="🧘‍♀️ Wellness Insights",
+            box=box.ROUNDED,
+        )
+        console.print(wellness_panel)
+
+        # Get latest scores
+        latest_hrv = garmin_client.get_latest_hrv_score()
+        latest_sleep = garmin_client.get_latest_sleep_score()
+
+        if latest_hrv or latest_sleep:
+            hrv_str = f"{latest_hrv:.0f}/100" if latest_hrv else 'No data'
+            sleep_str = f"{latest_sleep:.0f}/100" if latest_sleep else 'No data'
+
+            scores_panel = Panel(
+                f"""
+[bold]Latest Scores[/bold]
+
+[bold]❤️  HRV Score:[/bold] {hrv_str}
+[bold]😴 Sleep Score:[/bold] {sleep_str}
+                """,
+                title="📊 Current State",
+                box=box.ROUNDED,
+            )
+            console.print(scores_panel)
+
+        # Wellness recommendations
+        recommendations = []
+        if trend['avg_stress'] and trend['avg_stress'] > 50:
+            recommendations.append("Consider stress management techniques")
+        if trend['avg_sleep_score'] and trend['avg_sleep_score'] < 70:
+            recommendations.append("Focus on improving sleep quality")
+        if latest_hrv and latest_hrv < 40:
+            recommendations.append("HRV indicates need for recovery")
+
+        if recommendations:
+            console.print("\n[bold cyan]💡 Recommendations:[/bold cyan]")
+            for rec in recommendations:
+                console.print(f"  • {rec}")
+
+    except Exception as e:
+        console.print(f"[red]❌ Error analyzing wellness data: {e}[/red]")
+
+
+@garmin.command()
+def status():
+    """Show Garmin integration status."""
+    console.print(Panel.fit("ℹ️  Garmin Status", style="bold blue"))
+
+    try:
+        garmin_auth = get_garmin_auth()
+
+        # Check authentication
+        if garmin_auth.is_authenticated():
+            console.print("[green]✅ Authenticated with Garmin Connect[/green]")
+
+            # Test connection
+            with console.status("[cyan]Testing connection...[/cyan]"):
+                result = garmin_auth.test_connection()
+
+            if result["status"] == "success":
+                console.print(f"[green]✅ API connection working[/green]")
+                console.print(f"[dim]User: {result.get('display_name')}[/dim]")
+            else:
+                console.print(f"[yellow]⚠️  API connection issue: {result.get('message')}[/yellow]")
+        else:
+            console.print("[yellow]⚠️  Not authenticated with Garmin[/yellow]")
+
+        # Check data availability
+        try:
+            from .db import get_db
+            db = get_db()
+            with db.get_session() as session:
+                from .db.models import HRVData, SleepData, WellnessData
+
+                hrv_count = session.query(HRVData).count()
+                sleep_count = session.query(SleepData).count()
+                wellness_count = session.query(WellnessData).count()
+
+                console.print(f"\n[cyan]📊 Wellness Data:[/cyan]")
+                console.print(f"  • HRV records: {hrv_count}")
+                console.print(f"  • Sleep records: {sleep_count}")
+                console.print(f"  • Wellness records: {wellness_count}")
+
+                # Get latest records
+                latest_hrv = session.query(HRVData).order_by(HRVData.date.desc()).first()
+                latest_sleep = session.query(SleepData).order_by(SleepData.date.desc()).first()
+
+                if latest_hrv:
+                    console.print(f"\n[dim]Latest HRV: {latest_hrv.date.strftime('%Y-%m-%d')}[/dim]")
+                if latest_sleep:
+                    console.print(f"[dim]Latest Sleep: {latest_sleep.date.strftime('%Y-%m-%d')}[/dim]")
+
+        except Exception as e:
+            console.print(f"[red]❌ Database error: {e}[/red]")
+
+    except Exception as e:
+        console.print(f"[red]❌ Error checking status: {e}[/red]")
 
 
 def main():

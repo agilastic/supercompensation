@@ -8,6 +8,7 @@ from ..config import config
 from ..db import get_db
 from ..db.models import Metric, Activity
 from .multisport_metrics import MultiSportCalculator
+from .wellness_analyzer import get_wellness_analyzer
 
 
 class TrainingRecommendation(Enum):
@@ -27,6 +28,7 @@ class RecommendationEngine:
     def __init__(self, user_id: str = "default"):
         self.user_id = user_id
         self.db = get_db()
+        self.wellness_analyzer = get_wellness_analyzer(user_id)
 
     def get_recommendation(self) -> Dict[str, any]:
         """Get training recommendation for today."""
@@ -48,9 +50,12 @@ class RecommendationEngine:
             # Get recent activities to check for races or intense efforts
             recent_activities = self._get_recent_activities(session, days=3)
 
+            # Get wellness data for enhanced recommendations
+            wellness_readiness = self._get_wellness_readiness()
+
             # Generate recommendation
             recommendation = self._calculate_recommendation(
-                fitness, fatigue, form, recent_loads, recent_activities
+                fitness, fatigue, form, recent_loads, recent_activities, wellness_readiness
             )
 
             # Update database
@@ -65,7 +70,8 @@ class RecommendationEngine:
         fatigue: float,
         form: float,
         recent_loads: List[float],
-        recent_activities: List[Dict] = None
+        recent_activities: List[Dict] = None,
+        wellness_readiness: Dict = None
     ) -> Dict[str, any]:
         """Calculate training recommendation based on metrics and recent activities."""
 
@@ -73,7 +79,7 @@ class RecommendationEngine:
         fatigue_ratio = fatigue / (fitness + 1e-5)  # Prevent division by zero
         avg_recent_load = sum(recent_loads) / len(recent_loads) if recent_loads else 0
 
-        # Decision tree for recommendations
+        # Initialize recommendation with wellness context
         recommendation = {
             "type": TrainingRecommendation.MODERATE.value,
             "intensity": "moderate",
@@ -84,8 +90,45 @@ class RecommendationEngine:
                 "fatigue": round(fatigue, 1),
                 "form": round(form, 1),
                 "fatigue_ratio": round(fatigue_ratio, 2),
-            }
+            },
+            "wellness": wellness_readiness
         }
+
+        # Apply wellness-based modifications early in decision tree
+        wellness_modifier = 1.0
+        if wellness_readiness and wellness_readiness.get('readiness_score') is not None:
+            readiness_score = wellness_readiness['readiness_score']
+
+            # Get training load modifier from wellness data
+            wellness_modifier = self.wellness_analyzer.get_training_load_modifier()
+
+            # Add wellness info to metrics
+            recommendation["metrics"]["wellness_score"] = round(readiness_score, 1)
+            recommendation["metrics"]["wellness_modifier"] = round(wellness_modifier, 2)
+
+            # Early intervention for very poor wellness
+            if readiness_score < 35:
+                return {
+                    **recommendation,
+                    "type": TrainingRecommendation.REST.value,
+                    "intensity": "rest",
+                    "duration_minutes": 0,
+                    "notes": [
+                        "Poor wellness readiness detected",
+                        f"Readiness score: {readiness_score:.0f}/100",
+                        "Prioritize recovery today"
+                    ] + wellness_readiness.get('recommendations', [])[:2]
+                }
+            elif readiness_score < 50:
+                # Force recovery/easy training regardless of other metrics
+                recommendation.update({
+                    "type": TrainingRecommendation.RECOVERY.value,
+                    "intensity": "recovery",
+                    "duration_minutes": max(20, int(30 * wellness_modifier)),
+                })
+                recommendation["notes"].append(f"Wellness score ({readiness_score:.0f}/100) suggests easy training")
+                if wellness_readiness.get('recommendations'):
+                    recommendation["notes"].extend(wellness_readiness['recommendations'][:1])
 
         # PRIORITY 1: Check for recent race or very intense activity
         if recent_activities:
@@ -123,25 +166,46 @@ class RecommendationEngine:
                     "notes": ["High fatigue", "Active recovery recommended"],
                 })
 
-        # Good form - ready for quality training (but only if not recently raced)
+        # Good form - ready for quality training (but only if not recently raced and wellness allows)
         elif form > config.FORM_HIGH_THRESHOLD and recommendation["type"] not in [
             TrainingRecommendation.REST.value,
             TrainingRecommendation.RECOVERY.value,
             TrainingRecommendation.EASY.value
         ]:
-            if form > fitness * 0.1:  # Peak form
+            # Check if wellness allows high intensity
+            wellness_allows_intensity = wellness_modifier >= 0.85 if wellness_readiness else True
+
+            if form > fitness * 0.1 and wellness_allows_intensity:  # Peak form + good wellness
+                duration = int(90 * wellness_modifier)
+                notes = ["Excellent form!", "Perfect for race or time trial"]
+                if wellness_modifier < 1.0:
+                    notes.append(f"Duration adjusted for wellness ({wellness_modifier:.1f}x)")
+
                 recommendation.update({
                     "type": TrainingRecommendation.PEAK.value,
                     "intensity": "peak",
-                    "duration_minutes": 90,
-                    "notes": ["Excellent form!", "Perfect for race or time trial"],
+                    "duration_minutes": duration,
+                    "notes": notes,
                 })
-            else:
+            elif wellness_allows_intensity:
+                duration = int(75 * wellness_modifier)
+                notes = ["Good form", "Ready for high intensity training"]
+                if wellness_modifier < 1.0:
+                    notes.append(f"Duration adjusted for wellness ({wellness_modifier:.1f}x)")
+
                 recommendation.update({
                     "type": TrainingRecommendation.HARD.value,
                     "intensity": "hard",
-                    "duration_minutes": 75,
-                    "notes": ["Good form", "Ready for high intensity training"],
+                    "duration_minutes": duration,
+                    "notes": notes,
+                })
+            else:
+                # Good form but poor wellness - downgrade intensity
+                recommendation.update({
+                    "type": TrainingRecommendation.EASY.value,
+                    "intensity": "easy",
+                    "duration_minutes": int(60 * wellness_modifier),
+                    "notes": ["Good form but wellness suggests easy training", f"Wellness score: {wellness_readiness['readiness_score']:.0f}/100"],
                 })
 
         # Poor form - easy training only
@@ -386,6 +450,14 @@ class RecommendationEngine:
                     }
 
         return {"needs_recovery": False, "recommendation": {}}
+
+    def _get_wellness_readiness(self) -> Dict[str, any]:
+        """Get wellness readiness data for today."""
+        try:
+            return self.wellness_analyzer.get_readiness_score()
+        except Exception:
+            # If wellness data isn't available, return None
+            return None
 
     def _no_data_recommendation(self) -> Dict[str, any]:
         """Recommendation when no data is available."""

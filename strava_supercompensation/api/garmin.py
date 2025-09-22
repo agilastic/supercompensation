@@ -14,12 +14,12 @@ from ..db import get_db
 from ..db.models import HRVData, SleepData, WellnessData
 
 
-class GarminMFAError(Exception):
-    """Garmin MFA specific errors."""
+class GarminError(Exception):
+    """Garmin specific errors."""
     pass
 
 
-class GarminMFAClient:
+class GarminClient:
     """Garmin Connect client with manual MFA code support."""
 
     def __init__(self, user_id: str = "default"):
@@ -31,7 +31,7 @@ class GarminMFAClient:
         self.password = os.getenv("GARMIN_PASSWORD")
 
         if not self.email or not self.password:
-            raise GarminMFAError(
+            raise GarminError(
                 "Garmin credentials not found. Set GARMIN_EMAIL and GARMIN_PASSWORD environment variables."
             )
 
@@ -77,7 +77,7 @@ class GarminMFAClient:
                             else:
                                 print("Please enter a valid 6-digit MFA code")
                         except (EOFError, KeyboardInterrupt):
-                            raise GarminMFAError("MFA authentication cancelled by user")
+                            raise GarminError("MFA authentication cancelled by user")
 
             print("Attempting fresh login with MFA support...")
             garth.login(self.email, self.password, prompt_mfa=mfa_handler)
@@ -171,7 +171,7 @@ class GarminMFAClient:
         # Ensure we're authenticated
         login_result = self.login_with_mfa()
         if login_result["status"] != "success":
-            raise GarminMFAError(f"Login failed: {login_result['message']}")
+            raise GarminError(f"Login failed: {login_result['message']}")
 
         end_date = datetime.now().date()
         start_date = end_date - timedelta(days=days)
@@ -202,27 +202,39 @@ class GarminMFAClient:
         current_date = start_date
         while current_date <= end_date:
             try:
+                # Check what data types need syncing for this date
+                needs_hrv = current_date not in existing_hrv_dates
+                needs_sleep = current_date not in existing_sleep_dates
+                needs_wellness = current_date not in existing_wellness_dates
+
                 # Skip completely if all data types exist for this date
-                if (current_date in existing_hrv_dates and
-                    current_date in existing_sleep_dates and
-                    current_date in existing_wellness_dates):
+                if not (needs_hrv or needs_sleep or needs_wellness):
                     current_date += timedelta(days=1)
                     continue
 
-                print(f"Syncing data for {current_date}")
+                # Only print and process if we actually need to sync something
+                data_types_needed = []
+                if needs_hrv:
+                    data_types_needed.append("HRV")
+                if needs_sleep:
+                    data_types_needed.append("Sleep")
+                if needs_wellness:
+                    data_types_needed.append("Wellness")
+
+                print(f"Syncing data for {current_date} ({', '.join(data_types_needed)})")
 
                 # Get HRV data (skip if already exists)
-                if current_date not in existing_hrv_dates:
+                if needs_hrv:
                     if self._sync_hrv_for_date(current_date):
                         results["hrv_synced"] += 1
 
                 # Get sleep data (skip if already exists)
-                if current_date not in existing_sleep_dates:
+                if needs_sleep:
                     if self._sync_sleep_for_date(current_date):
                         results["sleep_synced"] += 1
 
                 # Get basic wellness data (skip if already exists)
-                if current_date not in existing_wellness_dates:
+                if needs_wellness:
                     if self._sync_wellness_for_date(current_date):
                         results["wellness_synced"] += 1
 
@@ -443,7 +455,60 @@ class GarminMFAClient:
                 "sleep_date": latest_sleep.date.strftime('%Y-%m-%d') if latest_sleep else None
             }
 
+    def get_latest_hrv_score(self) -> Optional[float]:
+        """Get the latest HRV score from the database."""
+        with self.db.get_session() as session:
+            latest_hrv = session.query(HRVData).filter_by(
+                user_id=self.user_id
+            ).order_by(HRVData.date.desc()).first()
 
-def get_garmin_mfa_client(user_id: str = "default") -> GarminMFAClient:
-    """Get Garmin MFA client for user."""
-    return GarminMFAClient(user_id)
+            return latest_hrv.hrv_score if latest_hrv else None
+
+    def get_latest_sleep_score(self) -> Optional[float]:
+        """Get the latest sleep score from the database."""
+        with self.db.get_session() as session:
+            latest_sleep = session.query(SleepData).filter_by(
+                user_id=self.user_id
+            ).order_by(SleepData.date.desc()).first()
+
+            return latest_sleep.sleep_score if latest_sleep else None
+
+    def get_wellness_trend(self, days: int = 7) -> Dict:
+        """Get wellness trend over the specified number of days."""
+        with self.db.get_session() as session:
+            end_date = datetime.now().date()
+            start_date = end_date - timedelta(days=days)
+
+            # Get HRV data
+            hrv_data = session.query(HRVData).filter(
+                HRVData.user_id == self.user_id,
+                HRVData.date >= datetime.combine(start_date, datetime.min.time()),
+                HRVData.date <= datetime.combine(end_date, datetime.min.time())
+            ).order_by(HRVData.date).all()
+
+            # Get Sleep data
+            sleep_data = session.query(SleepData).filter(
+                SleepData.user_id == self.user_id,
+                SleepData.date >= datetime.combine(start_date, datetime.min.time()),
+                SleepData.date <= datetime.combine(end_date, datetime.min.time())
+            ).order_by(SleepData.date).all()
+
+            # Get Wellness data
+            wellness_data = session.query(WellnessData).filter(
+                WellnessData.user_id == self.user_id,
+                WellnessData.date >= datetime.combine(start_date, datetime.min.time()),
+                WellnessData.date <= datetime.combine(end_date, datetime.min.time())
+            ).order_by(WellnessData.date).all()
+
+            return {
+                "hrv_trend": [{"date": d.date.strftime('%Y-%m-%d'), "score": d.hrv_score} for d in hrv_data if d.hrv_score],
+                "sleep_trend": [{"date": d.date.strftime('%Y-%m-%d'), "score": d.sleep_score} for d in sleep_data if d.sleep_score],
+                "stress_trend": [{"date": d.date.strftime('%Y-%m-%d'), "stress": d.stress_avg_value} for d in wellness_data if d.stress_avg_value],
+                "body_battery_trend": [{"date": d.date.strftime('%Y-%m-%d'), "battery": d.body_battery_charged_value} for d in wellness_data if d.body_battery_charged_value],
+                "date_range": f"{start_date} to {end_date}"
+            }
+
+
+def get_garmin_client(user_id: str = "default") -> GarminClient:
+    """Get Garmin client for user."""
+    return GarminClient(user_id)

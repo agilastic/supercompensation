@@ -13,8 +13,18 @@ from .auth import AuthManager
 from .auth.garmin_oauth import get_garmin_auth, GarminOAuthError
 from .api import StravaClient
 from .api.garmin_client import get_garmin_client, GarminAPIError
-# from .api.garmin_personal import get_garmin_personal_client, GarminPersonalError
-# from .api.garmin_mfa import get_garmin_mfa_client, GarminMFAError
+# Optional imports for Garmin personal access
+try:
+    from .api.garmin_personal import get_garmin_personal_client, GarminPersonalError
+except ImportError:
+    GarminPersonalError = Exception  # Fallback
+    get_garmin_personal_client = None  # Mark as unavailable
+
+try:
+    from .api.garmin_mfa import get_garmin_mfa_client, GarminMFAError
+except ImportError:
+    GarminMFAError = Exception  # Fallback
+    get_garmin_mfa_client = None  # Mark as unavailable
 from .analysis import SupercompensationAnalyzer, RecommendationEngine
 from .analysis.multisport_metrics import MultiSportCalculator
 
@@ -889,6 +899,10 @@ def test():
     console.print(Panel.fit("🧪 Testing Personal Garmin Access", style="bold blue"))
 
     try:
+        if get_garmin_personal_client is None:
+            console.print("[red]❌ Personal Garmin client not available. Missing garminconnect dependency.[/red]")
+            return
+
         garmin_client = get_garmin_personal_client()
 
         with console.status("[cyan]Testing connection...[/cyan]"):
@@ -919,6 +933,10 @@ def sync(days):
     console.print(Panel.fit(f"🔄 Syncing Personal Garmin Data ({days} days)", style="bold blue"))
 
     try:
+        if get_garmin_personal_client is None:
+            console.print("[red]❌ Personal Garmin client not available. Missing garminconnect dependency.[/red]")
+            return
+
         garmin_client = get_garmin_personal_client()
 
         with console.status(f"[cyan]Syncing HRV and sleep data from Garmin...[/cyan]"):
@@ -1004,6 +1022,10 @@ def scores():
     console.print(Panel.fit("📊 Latest Wellness Scores", style="bold blue"))
 
     try:
+        if get_garmin_personal_client is None:
+            console.print("[red]❌ Personal Garmin client not available. Missing garminconnect dependency.[/red]")
+            return
+
         garmin_client = get_garmin_personal_client()
         latest = garmin_client.get_latest_scores()
 
@@ -1143,6 +1165,223 @@ def sync_mfa(days, code):
             console.print("  strava-super personal login --code YOUR_MFA_CODE")
     except Exception as e:
         console.print(f"[red]❌ Error syncing data: {e}[/red]")
+
+
+@cli.command()
+@click.option("--strava-days", default=30, help="Days of Strava data to sync")
+@click.option("--garmin-days", default=30, help="Days of Garmin data to sync")
+@click.option("--plan-days", default=30, help="Training plan length (7 or 30 days)")
+@click.option("--skip-strava", is_flag=True, help="Skip Strava sync")
+@click.option("--skip-garmin", is_flag=True, help="Skip Garmin sync")
+@click.option("--skip-analysis", is_flag=True, help="Skip analysis step")
+def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_analysis):
+    """Complete training analysis workflow: sync all data, analyze, and get recommendations."""
+    console.print(Panel.fit("🚀 Complete Training Analysis Workflow", style="bold green"))
+
+    errors = []
+
+    # Step 1: Sync Strava data
+    if not skip_strava:
+        console.print("\n[bold cyan]📱 Step 1: Syncing Strava Activities[/bold cyan]")
+        try:
+            # Call the main CLI sync command (not personal Garmin sync)
+            ctx = click.get_current_context()
+            # Find the main sync command in the CLI group
+            main_sync = None
+            for command_name, command in cli.commands.items():
+                if command_name == "sync":
+                    main_sync = command
+                    break
+
+            if main_sync:
+                ctx.invoke(main_sync, days=strava_days)
+            else:
+                raise Exception("Main sync command not found")
+
+            console.print("[green]✅ Strava sync completed[/green]")
+        except Exception as e:
+            error_msg = f"Strava sync failed: {e}"
+            errors.append(error_msg)
+            console.print(f"[red]❌ {error_msg}[/red]")
+    else:
+        console.print("\n[dim]⏭️  Skipping Strava sync[/dim]")
+
+    # Step 2: Sync Garmin data (using personal access only)
+    if not skip_garmin:
+        console.print(f"\n[bold cyan]⌚ Step 2: Syncing Garmin Wellness Data ({garmin_days} days)[/bold cyan]")
+        try:
+            # Use personal Garmin access instead of OAuth1
+            if get_garmin_personal_client is not None:
+                ctx = click.get_current_context()
+                ctx.invoke(personal.commands["sync-mfa"], days=garmin_days)
+                console.print("[green]✅ Garmin wellness sync completed[/green]")
+            else:
+                console.print("[yellow]⚠️  Personal Garmin client not available. Install garminconnect for wellness data.[/yellow]")
+        except Exception as e:
+            error_msg = f"Garmin wellness sync failed: {e}"
+            errors.append(error_msg)
+            console.print(f"[red]❌ {error_msg}[/red]")
+    else:
+        console.print("\n[dim]⏭️  Skipping Garmin sync[/dim]")
+
+    # Step 3: Run analysis
+    if not skip_analysis:
+        console.print("\n[bold cyan]📊 Step 3: Analyzing Training Data[/bold cyan]")
+        try:
+            ctx = click.get_current_context()
+            ctx.invoke(analyze)
+            console.print("[green]✅ Analysis completed[/green]")
+        except Exception as e:
+            error_msg = f"Analysis failed: {e}"
+            errors.append(error_msg)
+            console.print(f"[red]❌ {error_msg}[/red]")
+    else:
+        console.print("\n[dim]⏭️  Skipping analysis[/dim]")
+
+    # Step 4: Get recommendations with training plan
+    console.print(f"\n[bold cyan]🎯 Step 4: Generating {plan_days}-Day Training Plan[/bold cyan]")
+    try:
+        # Get the recommendation with auto-generated training plan
+        from .analysis.recommendations import RecommendationEngine
+        engine = RecommendationEngine()
+
+        # Get today's recommendation
+        recommendation = engine.get_recommendation()
+
+        if recommendation:
+            # Display today's recommendation
+            console.print(Panel.fit("🎯 Today's Recommendation", style="bold blue"))
+
+            rec_colors = {
+                "REST": "red",
+                "RECOVERY": "yellow",
+                "EASY": "green",
+                "MODERATE": "cyan",
+                "HARD": "magenta",
+                "PEAK": "bold magenta"
+            }
+            rec_color = rec_colors.get(recommendation.get("recommendation", ""), "white")
+
+            console.print(f"\n[{rec_color}]{recommendation.get('recommendation', 'Unknown')}[/{rec_color}]")
+            console.print(f"Activity: {recommendation.get('activity', 'N/A')}")
+            console.print(f"Why: {recommendation.get('rationale', 'N/A')}")
+
+            if recommendation.get('metrics'):
+                metrics = recommendation['metrics']
+                console.print(f"\nCurrent Metrics:")
+                console.print(f"  Fitness: {metrics.get('fitness', 0):.1f} | Fatigue: {metrics.get('fatigue', 0):.1f} | Form: {metrics.get('form', 0):.1f}")
+
+        # Generate and display training plan
+        training_plan = engine.get_training_plan(days=plan_days)
+
+        if training_plan:
+            from rich.table import Table
+            from rich import box
+
+            title = f"{plan_days}-Day Training Plan"
+            table = Table(title=title, box=box.ROUNDED)
+            table.add_column("Day", style="cyan", width=3)
+            table.add_column("Date", style="white", width=8)
+            table.add_column("Intensity", style="yellow", width=8)
+            table.add_column("Activity", style="blue", width=26)
+            table.add_column("2nd Session", style="green", width=28)
+            table.add_column("Load", style="magenta", width=4)
+            table.add_column("Form", style="cyan", width=6)
+
+            # For 30-day plan, add week separators
+            current_week = -1
+            for plan in training_plan:
+                week_num = (plan['day'] - 1) // 7
+
+                # Add week separator for 30-day plan
+                if plan_days == 30 and week_num != current_week:
+                    current_week = week_num
+                    table.add_section()
+                    table.add_row(
+                        f"[bold]W{week_num+1}[/bold]",
+                        "[dim]────────[/dim]",
+                        "[dim]────────[/dim]",
+                        "[dim]──────────────────────[/dim]",
+                        "[dim]────────────────────────[/dim]",
+                        "[dim]────[/dim]",
+                        "[dim]──────[/dim]"
+                    )
+
+                # Color code recommendations
+                rec_colors = {
+                    "REST": "red",
+                    "RECOVERY": "yellow",
+                    "EASY": "green",
+                    "MODERATE": "cyan",
+                    "HARD": "magenta",
+                    "PEAK": "bold magenta"
+                }
+                rec_color = rec_colors.get(plan['recommendation'], "white")
+
+                # Get activity name
+                activity = plan.get('activity', 'Unknown')
+                if len(activity) > 26:
+                    activity = activity[:23] + "..."
+
+                # Get second session info
+                second_session = ""
+                if plan.get('second_activity'):
+                    second_activity = plan['second_activity']
+                    if len(second_activity) > 28:
+                        second_session = second_activity[:25] + "..."
+                    else:
+                        second_session = second_activity
+                else:
+                    second_session = "—"
+
+                # Format date (shorter)
+                date_str = plan['date']
+                if len(date_str) > 8:
+                    date_str = date_str[5:]  # Remove year, keep MM-DD
+
+                table.add_row(
+                    str(plan['day']),
+                    date_str,
+                    f"[{rec_color}]{plan['recommendation']}[/{rec_color}]",
+                    f"[blue]{activity}[/blue]",
+                    f"[green]{second_session}[/green]" if plan.get('second_activity') else f"[dim]{second_session}[/dim]",
+                    f"{plan['suggested_load']:.0f}",
+                    f"{plan['predicted_form']:.1f}",
+                )
+
+            console.print(table)
+
+            # Show summary
+            total_load = sum(p['suggested_load'] for p in training_plan)
+            rest_days = len([p for p in training_plan if p['recommendation'] == 'REST'])
+            hard_days = len([p for p in training_plan if p['recommendation'] in ['HARD', 'PEAK']])
+
+            console.print(Panel(f"Monthly Summary:\n"
+                                f"• Total Load: {total_load:.0f} TSS\n"
+                                f"• Average Daily Load: {total_load/len(training_plan):.0f} TSS\n"
+                                f"• Rest Days: {rest_days}\n"
+                                f"• Hard/Peak Days: {hard_days}\n"
+                                f"• Periodization: 3:1 (3 weeks build, 1 week recovery)",
+                                title="📊 Training Summary", style="bold green"))
+
+        console.print("[green]✅ Training plan generated[/green]")
+
+    except Exception as e:
+        error_msg = f"Recommendation generation failed: {e}"
+        errors.append(error_msg)
+        console.print(f"[red]❌ {error_msg}[/red]")
+
+    # Summary
+    console.print(f"\n[bold green]🏁 Workflow Complete![/bold green]")
+
+    if errors:
+        console.print(f"\n[yellow]⚠️  {len(errors)} errors occurred:[/yellow]")
+        for error in errors:
+            console.print(f"  • {error}")
+        console.print(f"\n[dim]You can run individual commands to fix specific issues[/dim]")
+    else:
+        console.print(f"[green]✅ All steps completed successfully![/green]")
+        console.print(f"[dim]Data synced • Analysis complete • Training plan ready[/dim]")
 
 
 def main():

@@ -13,6 +13,8 @@ from .auth import AuthManager
 from .auth.garmin_oauth import get_garmin_auth, GarminOAuthError
 from .api import StravaClient
 from .api.garmin_client import get_garmin_client, GarminAPIError
+from .api.garmin_personal import get_garmin_personal_client, GarminPersonalError
+from .api.garmin_mfa import get_garmin_mfa_client, GarminMFAError
 from .analysis import SupercompensationAnalyzer, RecommendationEngine
 from .analysis.multisport_metrics import MultiSportCalculator
 
@@ -73,6 +75,33 @@ def sync(days):
             count = client.sync_activities(days_back=days)
 
         console.print(f"[green]✅ Successfully synced {count} activities![/green]")
+
+        # Auto-sync Garmin wellness data if credentials available
+        try:
+            # Use MFA-capable client for better authentication
+            garmin_client = get_garmin_mfa_client()
+
+            console.print("\n[cyan]🏃‍♀️ Attempting to sync Garmin wellness data...[/cyan]")
+
+            garmin_results = garmin_client.sync_essential_data(days)
+
+            total_wellness = garmin_results["hrv_synced"] + garmin_results["sleep_synced"] + garmin_results["wellness_synced"]
+            if total_wellness > 0:
+                console.print(f"[green]✅ Also synced {total_wellness} wellness records from Garmin![/green]")
+            else:
+                console.print("[yellow]ℹ️  No new Garmin wellness data found[/yellow]")
+
+        except GarminMFAError as e:
+            if "credentials not found" in str(e).lower():
+                # Skip silently if no credentials
+                pass
+            elif "cancelled by user" in str(e).lower():
+                console.print("[yellow]⚠️  Garmin sync cancelled by user[/yellow]")
+            else:
+                console.print(f"[yellow]⚠️  Garmin wellness sync skipped: {str(e)[:50]}...[/yellow]")
+        except Exception as e:
+            # Any other Garmin error - don't break the main flow
+            console.print(f"[yellow]⚠️  Garmin wellness sync failed: {str(e)[:50]}...[/yellow]")
 
         # Show recent activities
         recent = client.get_recent_activities(days=7)
@@ -666,6 +695,274 @@ def status():
 
     except Exception as e:
         console.print(f"[red]❌ Error checking status: {e}[/red]")
+
+
+@cli.group()
+def personal():
+    """Personal Garmin Connect data access (using login credentials)."""
+    pass
+
+
+@personal.command()
+def test():
+    """Test personal Garmin Connect access."""
+    console.print(Panel.fit("🧪 Testing Personal Garmin Access", style="bold blue"))
+
+    try:
+        garmin_client = get_garmin_personal_client()
+
+        with console.status("[cyan]Testing connection...[/cyan]"):
+            result = garmin_client.test_connection()
+
+        if result["status"] == "success":
+            console.print("[green]✅ Connection successful![/green]")
+            console.print(f"[dim]Display Name: {result.get('display_name')}[/dim]")
+            console.print(f"[dim]User ID: {result.get('user_id')}[/dim]")
+            console.print(f"[dim]Email: {result.get('email')}[/dim]")
+        else:
+            console.print(f"[red]❌ Connection failed: {result.get('message')}[/red]")
+
+    except GarminPersonalError as e:
+        console.print(f"[red]❌ Garmin error: {e}[/red]")
+        console.print("\n[yellow]💡 Setup required:[/yellow]")
+        console.print("Set environment variables:")
+        console.print("  GARMIN_EMAIL=your_email@example.com")
+        console.print("  GARMIN_PASSWORD=your_password")
+    except Exception as e:
+        console.print(f"[red]❌ Unexpected error: {e}[/red]")
+
+
+@personal.command()
+@click.option("--days", default=7, help="Number of days to sync")
+def sync(days):
+    """Sync essential HRV and sleep data from personal Garmin Connect."""
+    console.print(Panel.fit(f"🔄 Syncing Personal Garmin Data ({days} days)", style="bold blue"))
+
+    try:
+        garmin_client = get_garmin_personal_client()
+
+        with console.status(f"[cyan]Syncing HRV and sleep data from Garmin...[/cyan]"):
+            results = garmin_client.sync_essential_data(days)
+
+        # Display results
+        table = Table(title="Sync Results", box=box.ROUNDED)
+        table.add_column("Data Type", style="cyan")
+        table.add_column("Records Synced", style="green")
+        table.add_column("Status", style="magenta")
+
+        table.add_row("HRV Data", str(results["hrv_synced"]), "[green]Success[/green]")
+        table.add_row("Sleep Data", str(results["sleep_synced"]), "[green]Success[/green]")
+        table.add_row("Wellness Data", str(results["wellness_synced"]), "[green]Success[/green]")
+
+        if results["errors"] > 0:
+            table.add_row("Errors", str(results["errors"]), "[red]Failed[/red]")
+
+        console.print(table)
+
+        # Show summary
+        total_synced = results["hrv_synced"] + results["sleep_synced"] + results["wellness_synced"]
+        console.print(f"\n[green]✅ Sync complete! {total_synced} total records synced[/green]")
+        console.print(f"[dim]Date range: {results['date_range']}[/dim]")
+
+        # Show latest scores
+        latest = garmin_client.get_latest_scores()
+        if latest["hrv_score"] or latest["sleep_score"]:
+            console.print(f"\n[bold cyan]📊 Latest Scores:[/bold cyan]")
+            if latest["hrv_score"]:
+                console.print(f"  • HRV: {latest['hrv_score']:.0f}/100 ({latest['hrv_date']})")
+            if latest["sleep_score"]:
+                console.print(f"  • Sleep: {latest['sleep_score']:.0f}/100 ({latest['sleep_date']})")
+
+    except GarminPersonalError as e:
+        console.print(f"[red]❌ Garmin error: {e}[/red]")
+        if "credentials not found" in str(e).lower():
+            console.print("\n[yellow]💡 Setup required:[/yellow]")
+            console.print("Add to your .env file:")
+            console.print("  GARMIN_EMAIL=your_email@example.com")
+            console.print("  GARMIN_PASSWORD=your_password")
+    except Exception as e:
+        console.print(f"[red]❌ Error syncing data: {e}[/red]")
+
+
+@personal.command()
+@click.option("--code", help="MFA verification code (optional - will prompt if not provided)")
+def test_mfa(code):
+    """Test Garmin connection with interactive MFA support."""
+    console.print(Panel.fit("🧪 Testing Garmin MFA Connection", style="bold blue"))
+
+    try:
+        garmin_client = get_garmin_mfa_client()
+
+        if code:
+            console.print(f"[cyan]Using provided MFA code: {code}[/cyan]")
+
+        console.print("[cyan]Testing Garmin connection...[/cyan]")
+        console.print("[dim]You will be prompted for an MFA code if needed[/dim]")
+
+        result = garmin_client.test_connection()
+
+        if result["status"] == "success":
+            console.print("[green]✅ Connection successful![/green]")
+            console.print(f"[dim]Display Name: {result.get('display_name')}[/dim]")
+            console.print(f"[dim]User ID: {result.get('user_id')}[/dim]")
+            console.print(f"[dim]Email: {result.get('email')}[/dim]")
+        else:
+            console.print(f"[red]❌ Connection failed: {result.get('message')}[/red]")
+
+    except GarminMFAError as e:
+        if "cancelled by user" in str(e).lower():
+            console.print("[yellow]⚠️  Authentication cancelled by user[/yellow]")
+        else:
+            console.print(f"[red]❌ Garmin MFA error: {e}[/red]")
+    except Exception as e:
+        console.print(f"[red]❌ Unexpected error: {e}[/red]")
+
+
+@personal.command()
+def scores():
+    """Show latest wellness scores from personal Garmin data."""
+    console.print(Panel.fit("📊 Latest Wellness Scores", style="bold blue"))
+
+    try:
+        garmin_client = get_garmin_personal_client()
+        latest = garmin_client.get_latest_scores()
+
+        if not latest["hrv_score"] and not latest["sleep_score"]:
+            console.print("[yellow]No wellness data found. Run 'personal sync' first.[/yellow]")
+            return
+
+        # Display scores
+        hrv_str = f"{latest['hrv_score']:.0f}/100" if latest['hrv_score'] else 'No data'
+        sleep_str = f"{latest['sleep_score']:.0f}/100" if latest['sleep_score'] else 'No data'
+
+        scores_panel = Panel(
+            f"""
+[bold]Latest Wellness Scores[/bold]
+
+[bold]❤️  HRV Score:[/bold] {hrv_str}
+[bold]📅 HRV Date:[/bold] {latest['hrv_date'] or 'N/A'}
+
+[bold]😴 Sleep Score:[/bold] {sleep_str}
+[bold]📅 Sleep Date:[/bold] {latest['sleep_date'] or 'N/A'}
+            """,
+            title="📊 Wellness Summary",
+            box=box.ROUNDED,
+        )
+        console.print(scores_panel)
+
+        # Get enhanced recommendation
+        console.print("\n[bold cyan]💡 Enhanced Recommendation:[/bold cyan]")
+        engine = RecommendationEngine()
+        recommendation = engine.get_recommendation()
+
+        if recommendation.get("wellness") and recommendation["wellness"].get("readiness_score"):
+            readiness = recommendation["wellness"]["readiness_score"]
+            console.print(f"  • Readiness Score: {readiness:.0f}/100")
+
+            if "wellness_modifier" in recommendation.get("metrics", {}):
+                modifier = recommendation["metrics"]["wellness_modifier"]
+                console.print(f"  • Training Adjustment: {modifier:.1f}x")
+
+    except Exception as e:
+        console.print(f"[red]❌ Error getting scores: {e}[/red]")
+
+
+@personal.command()
+@click.option("--code", help="MFA verification code from Garmin Connect")
+def login(code):
+    """Login to Garmin Connect with MFA support."""
+    console.print(Panel.fit("🔐 Garmin Connect MFA Login", style="bold blue"))
+
+    try:
+        garmin_client = get_garmin_mfa_client()
+
+        if code:
+            console.print(f"[cyan]Using provided MFA code: {code}[/cyan]")
+
+        with console.status("[cyan]Authenticating with Garmin...[/cyan]"):
+            result = garmin_client.login_with_mfa(code)
+
+        if result["status"] == "success":
+            console.print("[green]✅ Successfully authenticated![/green]")
+            console.print(f"[dim]User: {result.get('user', 'Unknown')}[/dim]")
+            console.print(f"[dim]Message: {result.get('message')}[/dim]")
+        elif result["status"] == "mfa_required":
+            console.print("[yellow]🔑 MFA code required[/yellow]")
+            console.print("[yellow]Please run: strava-super personal login --code YOUR_MFA_CODE[/yellow]")
+            console.print("[dim]Get the code from your Garmin Connect mobile app or email[/dim]")
+        else:
+            console.print(f"[red]❌ Authentication failed: {result.get('message')}[/red]")
+
+    except GarminMFAError as e:
+        console.print(f"[red]❌ Garmin error: {e}[/red]")
+        if "credentials not found" in str(e).lower():
+            console.print("\n[yellow]💡 Setup required:[/yellow]")
+            console.print("Add to your .env file:")
+            console.print("  GARMIN_EMAIL=your_email@example.com")
+            console.print("  GARMIN_PASSWORD=your_password")
+    except Exception as e:
+        console.print(f"[red]❌ Unexpected error: {e}[/red]")
+
+
+@personal.command()
+@click.option("--days", default=7, help="Number of days to sync")
+@click.option("--code", help="MFA verification code (optional - will prompt if not provided)")
+def sync_mfa(days, code):
+    """Sync wellness data using MFA-enabled client."""
+    console.print(Panel.fit(f"🔄 Syncing Garmin Data with MFA ({days} days)", style="bold blue"))
+
+    try:
+        garmin_client = get_garmin_mfa_client()
+
+        if code:
+            console.print(f"[cyan]Using provided MFA code: {code}[/cyan]")
+            # Try login first with provided code
+            login_result = garmin_client.login_with_mfa(code)
+            if login_result["status"] != "success":
+                console.print(f"[red]❌ Login failed: {login_result['message']}[/red]")
+                return
+
+        console.print("[cyan]Syncing HRV and sleep data...[/cyan]")
+        console.print("[dim]Note: You may be prompted for an MFA code if authentication is needed[/dim]")
+
+        results = garmin_client.sync_essential_data(days)
+
+        # Display results
+        table = Table(title="MFA Sync Results", box=box.ROUNDED)
+        table.add_column("Data Type", style="cyan")
+        table.add_column("Records Synced", style="green")
+        table.add_column("Status", style="magenta")
+
+        table.add_row("HRV Data", str(results["hrv_synced"]), "[green]Success[/green]")
+        table.add_row("Sleep Data", str(results["sleep_synced"]), "[green]Success[/green]")
+        table.add_row("Wellness Data", str(results["wellness_synced"]), "[green]Success[/green]")
+
+        if results["errors"] > 0:
+            table.add_row("Errors", str(results["errors"]), "[red]Failed[/red]")
+
+        console.print(table)
+
+        # Show summary
+        total_synced = results["hrv_synced"] + results["sleep_synced"] + results["wellness_synced"]
+        console.print(f"\n[green]✅ MFA sync complete! {total_synced} total records synced[/green]")
+        console.print(f"[dim]Date range: {results['date_range']}[/dim]")
+
+        # Show latest scores
+        latest = garmin_client.get_latest_scores()
+        if latest["hrv_score"] or latest["sleep_score"]:
+            console.print(f"\n[bold cyan]📊 Latest Scores:[/bold cyan]")
+            if latest["hrv_score"]:
+                console.print(f"  • HRV: {latest['hrv_score']:.0f}/100 ({latest['hrv_date']})")
+            if latest["sleep_score"]:
+                console.print(f"  • Sleep: {latest['sleep_score']:.0f}/100 ({latest['sleep_date']})")
+
+    except GarminMFAError as e:
+        console.print(f"[red]❌ Garmin MFA error: {e}[/red]")
+        if "login failed" in str(e).lower():
+            console.print("\n[yellow]💡 Try authenticating first:[/yellow]")
+            console.print("  strava-super personal login --code YOUR_MFA_CODE")
+    except Exception as e:
+        console.print(f"[red]❌ Error syncing data: {e}[/red]")
 
 
 def main():

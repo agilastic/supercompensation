@@ -1,8 +1,8 @@
 """Training recommendation engine based on supercompensation analysis."""
 
 from enum import Enum
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple
+from datetime import datetime, timedelta, timezone
+from typing import Dict, List, Optional, Tuple, Tuple
 
 from ..config import config
 from ..db import get_db
@@ -107,10 +107,19 @@ class RecommendationEngine:
             # 30+ TSS or 20+ minutes is enough to count as "already trained"
             if total_today_load >= 30 or total_today_duration >= 20:
                 activity_names = ', '.join([a.get('name', 'Activity') for a in today_activities[:2]])
+
+                # Get sport-specific REST recommendations
+                sport_recommendation = self._get_sport_specific_recommendation(
+                    TrainingRecommendation.REST.value, form, today_activities, recent_activities
+                )
+
                 return {
                     "type": TrainingRecommendation.REST.value,
                     "intensity": "rest",
                     "duration_minutes": 0,
+                    "activity": sport_recommendation["activity"],
+                    "activity_rationale": sport_recommendation["rationale"],
+                    "alternative_activities": sport_recommendation["alternatives"],
                     "notes": [
                         f"Training already completed today ({len(today_activities)} {'activity' if len(today_activities) == 1 else 'activities'})",
                         f"Today's load: {total_today_load:.0f} TSS, {total_today_duration:.0f} minutes",
@@ -130,11 +139,19 @@ class RecommendationEngine:
         fatigue_ratio = fatigue / (fitness + 1e-5)  # Prevent division by zero
         avg_recent_load = sum(recent_loads) / len(recent_loads) if recent_loads else 0
 
+        # Get sport-specific activity recommendation
+        sport_recommendation = self._get_sport_specific_recommendation(
+            TrainingRecommendation.MODERATE.value, form, today_activities, recent_activities
+        )
+
         # Initialize recommendation with wellness context
         recommendation = {
             "type": TrainingRecommendation.MODERATE.value,
             "intensity": "moderate",
             "duration_minutes": 60,
+            "activity": sport_recommendation["activity"],
+            "activity_rationale": sport_recommendation["rationale"],
+            "alternative_activities": sport_recommendation["alternatives"],
             "notes": [],
             "metrics": {
                 "fitness": round(fitness, 1),
@@ -469,7 +486,7 @@ class RecommendationEngine:
 
     def _get_recent_loads(self, session, days: int = 7) -> List[float]:
         """Get recent daily training loads."""
-        cutoff_date = datetime.utcnow() - timedelta(days=days)
+        cutoff_date = datetime.now(timezone.utc) - timedelta(days=days)
         metrics = session.query(Metric).filter(
             Metric.date >= cutoff_date
         ).order_by(Metric.date.desc()).all()
@@ -478,7 +495,7 @@ class RecommendationEngine:
 
     def _get_recent_activities(self, session, days: int = 3) -> List[Dict]:
         """Get recent activities with details."""
-        cutoff_date = datetime.utcnow() - timedelta(days=days)
+        cutoff_date = datetime.now(timezone.utc) - timedelta(days=days)
         activities = session.query(Activity).filter(
             Activity.start_date >= cutoff_date
         ).order_by(Activity.start_date.desc()).all()
@@ -503,7 +520,7 @@ class RecommendationEngine:
     def _get_today_activities(self, session) -> List[Dict]:
         """Get activities completed today."""
         # Get activities from today (UTC)
-        today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+        today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
         today_end = today_start + timedelta(days=1)
 
         activities = session.query(Activity).filter(
@@ -537,7 +554,7 @@ class RecommendationEngine:
         if not activities:
             return None
 
-        today = datetime.utcnow().date()
+        today = datetime.now(timezone.utc).date()
 
         for activity in activities:
             # PRIORITY 1: Check Strava's official workout_type flag
@@ -602,7 +619,7 @@ class RecommendationEngine:
     def _analyze_recovery_needs(self, activities: List[Dict]) -> Dict:
         """Analyze recovery needs based on recent activities with sport-specific protocols."""
         multisport_calc = MultiSportCalculator()
-        today = datetime.utcnow().date()
+        today = datetime.now(timezone.utc).date()
 
         for activity in activities:
             # Check if it's a race
@@ -623,7 +640,7 @@ class RecommendationEngine:
                 activity_date = activity_datetime
                 activity_dt = datetime.combine(activity_date, datetime.min.time())
 
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)
             hours_since = (now - activity_dt).total_seconds() / 3600
 
             # Check if still in recovery period
@@ -726,8 +743,8 @@ class RecommendationEngine:
             }
         }
 
-    def get_weekly_plan(self) -> List[Dict[str, any]]:
-        """Generate a weekly training plan."""
+    def get_training_plan(self, days: int = 7) -> List[Dict[str, any]]:
+        """Generate a training plan for specified number of days (7 or 30)."""
         recommendations = []
         current_state = self._get_current_state()
 
@@ -737,14 +754,16 @@ class RecommendationEngine:
         fitness = current_state["fitness"]
         fatigue = current_state["fatigue"]
 
-        # Check if already trained today (for day 0)
+        # Check if already trained today (for day 0) and get recent activities
         today_activities = None
+        recent_activities = []
         if self.db:
             with self.db.get_session() as session:
                 today_activities = self._get_today_activities(session)
+                recent_activities = self._get_recent_activities(session, days=7)
 
-        # Simulate a week of training
-        for day in range(7):
+        # Generate training plan
+        for day in range(days):
             # Decay fitness and fatigue
             fitness *= 0.98  # Approximate daily decay
             fatigue *= 0.90  # Faster fatigue decay
@@ -764,34 +783,514 @@ class RecommendationEngine:
                     # Not enough training yet today
                     rec_type = TrainingRecommendation.RECOVERY.value
                     load = 20
-            # Regular pattern for future days
-            elif day in [2, 5]:  # Hard days
-                if form > 0:
-                    rec_type = TrainingRecommendation.HARD.value
-                    load = 100
-                else:
-                    rec_type = TrainingRecommendation.MODERATE.value
-                    load = 60
-            elif day in [0, 6]:  # Rest/recovery days (day 0 handled above)
-                rec_type = TrainingRecommendation.RECOVERY.value
-                load = 20
-            else:  # Moderate days
-                rec_type = TrainingRecommendation.MODERATE.value
-                load = 60
+            else:
+                # Determine training type based on periodization pattern
+                rec_type, load = self._get_periodized_recommendation(day, form, fatigue, fitness)
 
             # Update state for next day
             fitness += load * config.FITNESS_MAGNITUDE / config.FITNESS_DECAY_RATE
             fatigue += load * config.FATIGUE_MAGNITUDE / config.FATIGUE_DECAY_RATE
 
+            # Get sport-specific activity for this day
+            if day == 0 and today_activities:
+                # For today, use today's activities
+                sport_rec = self._get_sport_specific_recommendation(rec_type, form, today_activities, recent_activities)
+            else:
+                # For future days, simulate recent activities by using current pattern
+                sport_rec = self._get_sport_specific_recommendation(rec_type, form, [], recent_activities)
+
             recommendations.append({
                 "day": day + 1,
-                "date": (datetime.utcnow() + timedelta(days=day)).date().isoformat(),
+                "date": (datetime.now(timezone.utc) + timedelta(days=day)).date().isoformat(),
                 "recommendation": rec_type,
+                "activity": sport_rec["activity"],
+                "activity_rationale": sport_rec["rationale"],
+                "alternative_activities": sport_rec["alternatives"],
                 "suggested_load": load,
                 "predicted_form": round(form, 1),
             })
 
         return recommendations
+
+    def get_weekly_plan(self) -> List[Dict[str, any]]:
+        """Get 7-day training plan (backward compatibility)."""
+        return self.get_training_plan(days=7)
+
+    def _get_periodized_recommendation(self, day: int, form: float, fatigue: float, fitness: float) -> Tuple[str, int]:
+        """
+        Generate periodized training recommendation based on day and current state.
+        Uses 3:1 loading pattern with weekly variation.
+        """
+        week_num = day // 7  # Week number (0-based)
+        day_of_week = day % 7  # Day within week (0=Sunday)
+
+        # Base training pattern (modified by form and fatigue)
+        fatigue_ratio = fatigue / (fitness + 1e-5)
+
+        # Weekly volume progression (undulating periodization)
+        week_multipliers = [1.0, 1.1, 1.2, 0.8]  # 3 weeks build, 1 week recovery
+        week_mult = week_multipliers[week_num % 4]
+
+        # High fatigue = reduce intensity
+        if fatigue_ratio > 0.8:
+            if day_of_week in [0, 6]:  # Weekend
+                return TrainingRecommendation.REST.value, 0
+            else:
+                return TrainingRecommendation.RECOVERY.value, int(20 * week_mult)
+
+        # Good form = quality work possible
+        if form > 10:
+            # Tuesday/Thursday = Hard days
+            if day_of_week in [2, 4]:
+                if form > 30:
+                    return TrainingRecommendation.PEAK.value, int(120 * week_mult)
+                else:
+                    return TrainingRecommendation.HARD.value, int(100 * week_mult)
+            # Saturday = Long moderate
+            elif day_of_week == 6:
+                return TrainingRecommendation.MODERATE.value, int(80 * week_mult)
+            # Sunday = Recovery
+            elif day_of_week == 0:
+                return TrainingRecommendation.RECOVERY.value, int(30 * week_mult)
+            # Monday/Wednesday/Friday = Easy/Moderate
+            else:
+                if day_of_week in [1, 5]:
+                    return TrainingRecommendation.EASY.value, int(50 * week_mult)
+                else:
+                    return TrainingRecommendation.MODERATE.value, int(60 * week_mult)
+
+        # Poor form = focus on recovery
+        elif form < -5:
+            if day_of_week in [0, 3, 6]:  # More rest days
+                return TrainingRecommendation.REST.value, 0
+            else:
+                return TrainingRecommendation.RECOVERY.value, int(20 * week_mult)
+
+        # Neutral form = balanced approach
+        else:
+            if day_of_week in [2, 4]:  # Moderate intensity days
+                return TrainingRecommendation.MODERATE.value, int(70 * week_mult)
+            elif day_of_week in [0, 6]:  # Weekend easier
+                return TrainingRecommendation.EASY.value, int(40 * week_mult)
+            else:
+                return TrainingRecommendation.MODERATE.value, int(60 * week_mult)
+
+    def _get_sport_specific_recommendation(
+        self,
+        intensity: str,
+        form: float,
+        today_activities: List[Dict] = None,
+        recent_activities: List[Dict] = None
+    ) -> Dict[str, any]:
+        """
+        Generate sport-specific activity recommendations based on:
+        - Recent sport usage patterns
+        - Recovery needs
+        - Injury prevention
+        - Environmental conditions
+        """
+        # Get recent sport usage (last 7 days)
+        recent_sports = self._analyze_recent_sport_usage(recent_activities or [])
+
+        # Define sport characteristics
+        sport_profiles = {
+            "Run": {
+                "impact": "high",
+                "intensity_capacity": ["EASY", "MODERATE", "HARD", "PEAK"],
+                "recovery_time": 48,  # hours
+                "weather_dependent": True,
+                "equipment": "minimal"
+            },
+            "Ride": {
+                "impact": "low",
+                "intensity_capacity": ["RECOVERY", "EASY", "MODERATE", "HARD", "PEAK"],
+                "recovery_time": 24,
+                "weather_dependent": True,
+                "equipment": "bike"
+            },
+            "Hike": {
+                "impact": "medium",
+                "intensity_capacity": ["RECOVERY", "EASY", "MODERATE"],
+                "recovery_time": 24,
+                "weather_dependent": True,
+                "equipment": "minimal"
+            },
+            "Workout": {
+                "impact": "low",
+                "intensity_capacity": ["RECOVERY", "EASY", "MODERATE", "HARD"],
+                "recovery_time": 24,
+                "weather_dependent": False,
+                "equipment": "gym"
+            },
+            "WeightTraining": {
+                "impact": "low",
+                "intensity_capacity": ["MODERATE", "HARD"],
+                "recovery_time": 48,
+                "weather_dependent": False,
+                "equipment": "gym"
+            },
+            "Rowing": {
+                "impact": "very_low",
+                "intensity_capacity": ["RECOVERY", "EASY", "MODERATE", "HARD"],
+                "recovery_time": 24,
+                "weather_dependent": False,
+                "equipment": "machine"
+            }
+        }
+
+        # Get primary recommendation
+        primary_activity = self._select_primary_activity(
+            intensity, form, recent_sports, sport_profiles
+        )
+
+        # Get alternatives
+        alternatives = self._get_alternative_activities(
+            intensity, primary_activity, sport_profiles, recent_sports
+        )
+
+        # Generate rationale
+        rationale = self._generate_activity_rationale(
+            primary_activity, intensity, recent_sports, today_activities
+        )
+
+        return {
+            "activity": primary_activity,
+            "rationale": rationale,
+            "alternatives": alternatives
+        }
+
+    def _analyze_recent_sport_usage(self, recent_activities: List[Dict]) -> Dict[str, Dict]:
+        """Analyze recent sport usage patterns."""
+        sport_analysis = {}
+
+        for activity in recent_activities:
+            sport_type = activity.get('type', 'Unknown')
+            days_ago = (datetime.now(timezone.utc).date() - activity.get('start_date').date()).days
+
+            if sport_type not in sport_analysis:
+                sport_analysis[sport_type] = {
+                    'last_used': days_ago,
+                    'frequency': 0,
+                    'total_load': 0,
+                    'avg_load': 0,
+                    'recent_intensity': 'moderate'
+                }
+
+            sport_analysis[sport_type]['frequency'] += 1
+            sport_analysis[sport_type]['total_load'] += activity.get('training_load', 0)
+            sport_analysis[sport_type]['last_used'] = min(sport_analysis[sport_type]['last_used'], days_ago)
+
+        # Calculate averages
+        for sport_data in sport_analysis.values():
+            if sport_data['frequency'] > 0:
+                sport_data['avg_load'] = sport_data['total_load'] / sport_data['frequency']
+
+        return sport_analysis
+
+    def _get_user_sport_preferences(self) -> Dict[str, float]:
+        """Get user's sport preferences from configuration."""
+        from ..config import config
+        return {sport: config.get_sport_preference(sport)
+                for sport in config.get_enabled_sports()}
+
+    def _calculate_sport_rotation_score(self, sport: str, recent_sports: Dict, intensity: str) -> float:
+        """Calculate rotation score for smart sport selection (higher = better choice)."""
+
+        user_prefs = self._get_user_sport_preferences()
+        base_preference = user_prefs.get(sport, 0.1)  # Default low preference for unknown sports
+
+        # Days since last use (higher is better for rotation)
+        days_since_use = recent_sports.get(sport, {}).get('last_used', 14)  # Default to 14 if never used
+        recency_score = min(days_since_use / 7.0, 2.0)  # Max score at 7+ days
+
+        # Frequency penalty (recent overuse gets lower score)
+        recent_frequency = recent_sports.get(sport, {}).get('frequency', 0)
+        frequency_penalty = max(0.2, 1.0 - (recent_frequency * 0.15))  # Penalty for overuse
+
+        # Intensity appropriateness
+        intensity_match = self._get_intensity_appropriateness(sport, intensity)
+
+        # Recovery considerations (avoid high-impact after high-impact)
+        recovery_bonus = self._get_recovery_appropriateness(sport, recent_sports)
+
+        # Final score combines all factors
+        total_score = base_preference * recency_score * frequency_penalty * intensity_match * recovery_bonus
+
+        return total_score
+
+    def _get_intensity_appropriateness(self, sport: str, intensity: str) -> float:
+        """How well a sport matches the required intensity (0.1-1.0)."""
+
+        sport_intensity_map = {
+            "WeightTraining": {
+                "REST": 0.1, "RECOVERY": 0.4, "EASY": 0.6, "MODERATE": 1.0, "HARD": 0.9, "PEAK": 0.7
+            },
+            "Ride": {
+                "REST": 0.1, "RECOVERY": 1.0, "EASY": 1.0, "MODERATE": 1.0, "HARD": 1.0, "PEAK": 1.0
+            },
+            "Run": {
+                "REST": 0.1, "RECOVERY": 0.6, "EASY": 1.0, "MODERATE": 1.0, "HARD": 1.0, "PEAK": 1.0
+            },
+            "Hike": {
+                "REST": 0.1, "RECOVERY": 0.9, "EASY": 1.0, "MODERATE": 0.8, "HARD": 0.4, "PEAK": 0.2
+            },
+            "Workout": {
+                "REST": 0.1, "RECOVERY": 0.5, "EASY": 0.7, "MODERATE": 1.0, "HARD": 0.9, "PEAK": 0.6
+            },
+            "Rowing": {
+                "REST": 0.1, "RECOVERY": 0.8, "EASY": 0.9, "MODERATE": 1.0, "HARD": 1.0, "PEAK": 0.8
+            },
+            "Swim": {
+                "REST": 0.1, "RECOVERY": 1.0, "EASY": 1.0, "MODERATE": 1.0, "HARD": 1.0, "PEAK": 0.9
+            },
+            "AlpineSki": {
+                "REST": 0.1, "RECOVERY": 0.4, "EASY": 0.7, "MODERATE": 1.0, "HARD": 1.0, "PEAK": 1.0
+            },
+            "Yoga": {
+                "REST": 0.1, "RECOVERY": 1.0, "EASY": 0.9, "MODERATE": 0.7, "HARD": 0.5, "PEAK": 0.3
+            }
+        }
+
+        return sport_intensity_map.get(sport, {}).get(intensity, 0.5)
+
+    def _get_recovery_appropriateness(self, sport: str, recent_sports: Dict) -> float:
+        """Calculate recovery appropriateness bonus (avoid high-impact after high-impact)."""
+
+        # Check recent high-impact activities
+        recent_run = recent_sports.get("Run", {}).get("last_used", 7)
+        recent_high_impact = min(recent_run, 7)
+
+        sport_impact = {
+            "Run": "high",
+            "WeightTraining": "medium",
+            "Hike": "medium",
+            "AlpineSki": "high",
+            "Ride": "low",
+            "Workout": "low",
+            "Rowing": "low",
+            "Swim": "low",
+            "Yoga": "low"
+        }
+
+        current_impact = sport_impact.get(sport, "medium")
+
+        # If recent high-impact activity, prefer low-impact
+        if recent_high_impact <= 1:  # Within 1 day
+            if current_impact == "low":
+                return 1.5  # Bonus for low-impact
+            elif current_impact == "medium":
+                return 1.0  # Neutral
+            else:
+                return 0.4  # Penalty for high-impact
+        else:
+            return 1.0  # No penalty/bonus
+
+    def _get_underused_sport_bonus(self, sport: str, recent_sports: Dict) -> str:
+        """Check if sport should get underused bonus recommendation."""
+
+        days_since_use = recent_sports.get(sport, {}).get('last_used', 999)
+
+        # WeightTraining is critical for balanced training
+        if sport == "WeightTraining" and days_since_use > 7:
+            return "⚠️ Strength training needed - not done in over 7 days"
+
+        # Other sports
+        if days_since_use > 10:
+            return f"Consider {sport} - last used {days_since_use} days ago"
+
+        return ""
+
+    def _select_primary_activity(
+        self,
+        intensity: str,
+        form: float,
+        recent_sports: Dict,
+        sport_profiles: Dict
+    ) -> str:
+        """Select primary activity using smart rotation algorithm."""
+
+        # For REST intensity
+        if intensity == "REST":
+            return "Complete Rest"
+
+        # Use smart rotation algorithm for all other intensities
+        from ..config import config
+        available_sports = config.get_enabled_sports()
+
+        # Calculate rotation scores for all enabled sports
+        sport_scores = {}
+        for sport in available_sports:
+            score = self._calculate_sport_rotation_score(sport, recent_sports, intensity)
+            sport_scores[sport] = score
+
+        # Select the sport with highest rotation score
+        best_sport = max(sport_scores.keys(), key=lambda s: sport_scores[s])
+
+        # Generate activity name based on sport and intensity
+        activity_name = self._get_activity_name_for_sport_intensity(best_sport, intensity)
+
+        return activity_name
+
+    def _get_activity_name_for_sport_intensity(self, sport: str, intensity: str) -> str:
+        """Generate specific activity name based on sport and intensity."""
+
+        activity_map = {
+            "Ride": {
+                "RECOVERY": "Easy Recovery Ride",
+                "EASY": "Zone 2 Endurance Ride",
+                "MODERATE": "Tempo Ride",
+                "HARD": "FTP Intervals (Bike)",
+                "PEAK": "VO2 Max Bike Intervals"
+            },
+            "Run": {
+                "RECOVERY": "Easy Recovery Jog",
+                "EASY": "Conversational Run",
+                "MODERATE": "Tempo Run",
+                "HARD": "Threshold Intervals",
+                "PEAK": "VO2 Max Intervals"
+            },
+            "Hike": {
+                "RECOVERY": "Gentle Nature Walk",
+                "EASY": "Conversational Hike",
+                "MODERATE": "Brisk Hiking",
+                "HARD": "Hill Hiking",
+                "PEAK": "Mountain Hiking"
+            },
+            "WeightTraining": {
+                "RECOVERY": "Mobility & Light Weights",
+                "EASY": "General Strength",
+                "MODERATE": "Strength Training",
+                "HARD": "Power/Strength Focus",
+                "PEAK": "Max Strength Session"
+            },
+            "Workout": {
+                "RECOVERY": "Yoga/Stretching",
+                "EASY": "Light Circuit Training",
+                "MODERATE": "Circuit Training",
+                "HARD": "HIIT Workout",
+                "PEAK": "Intense Functional Training"
+            },
+            "Rowing": {
+                "RECOVERY": "Easy Recovery Row",
+                "EASY": "Steady State Rowing",
+                "MODERATE": "Tempo Rowing",
+                "HARD": "Rowing Intervals",
+                "PEAK": "Sprint Rowing"
+            },
+            "Swim": {
+                "RECOVERY": "Easy Recovery Swim",
+                "EASY": "Zone 2 Swimming",
+                "MODERATE": "Tempo Swimming",
+                "HARD": "Swimming Intervals",
+                "PEAK": "Sprint Swimming"
+            },
+            "AlpineSki": {
+                "RECOVERY": "Gentle Ski Touring",
+                "EASY": "Relaxed Skiing",
+                "MODERATE": "Alpine Skiing",
+                "HARD": "Aggressive Skiing",
+                "PEAK": "Race Training"
+            },
+            "Yoga": {
+                "RECOVERY": "Restorative Yoga",
+                "EASY": "Gentle Yoga Flow",
+                "MODERATE": "Vinyasa Yoga",
+                "HARD": "Power Yoga",
+                "PEAK": "Advanced Yoga"
+            }
+        }
+
+        return activity_map.get(sport, {}).get(intensity, f"{intensity.title()} {sport}")
+
+    def _get_alternative_activities(
+        self,
+        intensity: str,
+        primary_activity: str,
+        sport_profiles: Dict,
+        recent_sports: Dict
+    ) -> List[str]:
+        """Get 2-3 alternative activities for the same intensity."""
+        alternatives = []
+
+        if intensity == "REST":
+            return ["Gentle Yoga", "Stretching", "Massage"]
+
+        if intensity == "RECOVERY":
+            alternatives = ["Easy Walk", "Gentle Yoga", "Swimming (if available)"]
+        elif intensity == "EASY":
+            alternatives = ["Zone 2 Bike", "Easy Hike", "Easy Jog"]
+        elif intensity == "MODERATE":
+            alternatives = ["Tempo Run", "Endurance Ride", "Circuit Training"]
+        elif intensity in ["HARD", "PEAK"]:
+            alternatives = ["Interval Run", "Bike Intervals", "Rowing Intervals"]
+
+        # Remove the primary activity from alternatives
+        alternatives = [alt for alt in alternatives if alt != primary_activity]
+        return alternatives[:3]
+
+    def _generate_activity_rationale(
+        self,
+        activity: str,
+        intensity: str,
+        recent_sports: Dict,
+        today_activities: List[Dict] = None
+    ) -> str:
+        """Generate explanation for activity choice."""
+
+        if intensity == "REST":
+            return "Complete rest recommended after recent training load"
+
+        # Generate smart rotation rationale
+        rationale_parts = []
+
+        # Check what was done recently for recovery considerations
+        recent_run = recent_sports.get("Run", {}).get("last_used", 999)
+        recent_ride = recent_sports.get("Ride", {}).get("last_used", 999)
+        recent_weight = recent_sports.get("WeightTraining", {}).get("last_used", 999)
+
+        # Activity-specific rationale
+        if "Ride" in activity or "Cycling" in activity:
+            if recent_run <= 1:
+                rationale_parts.append("Low-impact cycling after recent running")
+            elif recent_ride >= 3:
+                rationale_parts.append(f"Cycling rotation (last ride {recent_ride} days ago)")
+            else:
+                rationale_parts.append("Cycling for aerobic development")
+
+        elif "Run" in activity or "Jog" in activity:
+            if recent_run >= 2:
+                rationale_parts.append(f"Running rotation (adequate recovery: {recent_run} days)")
+            elif recent_run <= 1:
+                rationale_parts.append("Running despite recent run - high training load needed")
+            else:
+                rationale_parts.append("Running for sport-specific development")
+
+        elif "WeightTraining" in activity or "Strength" in activity:
+            if recent_weight > 7:
+                rationale_parts.append("⚠️ Strength training prioritized - not done in over 7 days")
+            else:
+                rationale_parts.append("Strength training for balanced development")
+
+        elif "Hike" in activity:
+            rationale_parts.append("Hiking for low-impact endurance and mental refreshment")
+
+        elif "Rowing" in activity:
+            rationale_parts.append("Full-body, low-impact cardiovascular training")
+
+        elif "Workout" in activity or "Circuit" in activity or "HIIT" in activity:
+            rationale_parts.append("Functional training for strength-endurance combination")
+
+        # Add rotation insight
+        underused_sports = []
+        for sport in ["WeightTraining", "Rowing", "Hike"]:
+            days_ago = recent_sports.get(sport, {}).get("last_used", 999)
+            if days_ago > 7:
+                underused_sports.append(f"{sport} ({days_ago}+ days)")
+
+        if underused_sports:
+            rationale_parts.append(f"Consider variety: {', '.join(underused_sports)} overdue")
+
+        return " • ".join(rationale_parts) if rationale_parts else "Selected based on smart rotation algorithm"
 
     def _get_current_state(self) -> Optional[Dict[str, float]]:
         """Get current fitness and fatigue values."""

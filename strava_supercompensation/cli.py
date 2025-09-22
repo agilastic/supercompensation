@@ -13,12 +13,32 @@ from .auth import AuthManager
 from .auth.garmin_oauth import get_garmin_auth, GarminOAuthError
 from .api import StravaClient
 from .api.garmin_client import get_garmin_client, GarminAPIError
-from .api.garmin_personal import get_garmin_personal_client, GarminPersonalError
-from .api.garmin_mfa import get_garmin_mfa_client, GarminMFAError
+# from .api.garmin_personal import get_garmin_personal_client, GarminPersonalError
+# from .api.garmin_mfa import get_garmin_mfa_client, GarminMFAError
 from .analysis import SupercompensationAnalyzer, RecommendationEngine
 from .analysis.multisport_metrics import MultiSportCalculator
 
 console = Console()
+
+
+def handle_auth_error(error: Exception, auth_manager, operation_name: str = "operation") -> bool:
+    """Handle 401 authentication errors with automatic re-authentication.
+
+    Returns True if successfully re-authenticated, False otherwise.
+    """
+    error_str = str(error)
+
+    if "401" in error_str and "Unauthorized" in error_str:
+        console.print(f"[yellow]⚠️  Authentication token expired. Re-authenticating...[/yellow]")
+
+        if auth_manager.authenticate():
+            console.print(f"[green]✅ Re-authentication successful! Retrying {operation_name}...[/green]")
+            return True
+        else:
+            console.print("[red]❌ Re-authentication failed. Please run 'strava-super auth' manually.[/red]")
+            return False
+
+    return False
 
 
 @click.group()
@@ -65,8 +85,12 @@ def sync(days):
 
     auth_manager = AuthManager()
     if not auth_manager.is_authenticated():
-        console.print("[red]❌ Not authenticated. Please run 'strava-super auth' first.[/red]")
-        return
+        console.print("[yellow]⚠️  No valid authentication found. Attempting to authenticate...[/yellow]")
+        if auth_manager.authenticate():
+            console.print("[green]✅ Authentication successful![/green]")
+        else:
+            console.print("[red]❌ Authentication failed. Please check your credentials.[/red]")
+            return
 
     try:
         client = StravaClient()
@@ -78,8 +102,8 @@ def sync(days):
 
         # Auto-sync Garmin wellness data if credentials available
         try:
-            # Use MFA-capable client for better authentication
-            garmin_client = get_garmin_mfa_client()
+            # Use standard Garmin client
+            garmin_client = get_garmin_client()
 
             console.print("\n[cyan]🏃‍♀️ Attempting to sync Garmin wellness data...[/cyan]")
 
@@ -91,14 +115,14 @@ def sync(days):
             else:
                 console.print("[yellow]ℹ️  No new Garmin wellness data found[/yellow]")
 
-        except GarminMFAError as e:
-            if "credentials not found" in str(e).lower():
+        except Exception as garmin_error:
+            if "credentials not found" in str(garmin_error).lower():
                 # Skip silently if no credentials
                 pass
-            elif "cancelled by user" in str(e).lower():
+            elif "cancelled by user" in str(garmin_error).lower():
                 console.print("[yellow]⚠️  Garmin sync cancelled by user[/yellow]")
             else:
-                console.print(f"[yellow]⚠️  Garmin wellness sync skipped: {str(e)[:50]}...[/yellow]")
+                console.print(f"[yellow]⚠️  Garmin wellness sync skipped: {str(garmin_error)[:50]}...[/yellow]")
         except Exception as e:
             # Any other Garmin error - don't break the main flow
             console.print(f"[yellow]⚠️  Garmin wellness sync failed: {str(e)[:50]}...[/yellow]")
@@ -127,7 +151,43 @@ def sync(days):
             console.print("\n", table)
 
     except Exception as e:
-        console.print(f"[red]❌ Error syncing activities: {e}[/red]")
+        # Try automatic re-authentication for 401 errors
+        if handle_auth_error(e, auth_manager, "sync"):
+            # Retry the sync operation
+            try:
+                client = StravaClient()
+                with console.status(f"[cyan]Retrying sync...[/cyan]"):
+                    count = client.sync_activities(days_back=days)
+                console.print(f"[green]✅ Successfully synced {count} activities![/green]")
+
+                # Show recent activities after successful retry
+                recent = client.get_recent_activities(days=7)
+                if recent:
+                    table = Table(title="Recent Activities", box=box.ROUNDED)
+                    table.add_column("Date", style="cyan")
+                    table.add_column("Name", style="white")
+                    table.add_column("Type", style="yellow")
+                    table.add_column("Duration", style="green")
+                    table.add_column("Load", style="magenta")
+
+                    for activity in recent[:5]:
+                        duration = f"{activity['moving_time'] // 60}min" if activity['moving_time'] else "N/A"
+                        load = f"{activity['training_load']:.0f}" if activity['training_load'] else "N/A"
+                        table.add_row(
+                            activity['start_date'].strftime("%Y-%m-%d"),
+                            activity['name'][:30] if activity['name'] else "N/A",
+                            activity['type'] if activity['type'] else "N/A",
+                            duration,
+                            load,
+                        )
+
+                    console.print("\n", table)
+                return
+
+            except Exception as retry_error:
+                console.print(f"[red]❌ Retry failed: {retry_error}[/red]")
+        else:
+            console.print(f"[red]❌ Error syncing activities: {e}[/red]")
 
 
 @cli.command()
@@ -192,7 +252,18 @@ def analyze(days):
         console.print("[green]✅ Analysis complete![/green]")
 
     except Exception as e:
-        console.print(f"[red]❌ Error analyzing data: {e}[/red]")
+        # Try automatic re-authentication for 401 errors
+        if handle_auth_error(e, auth_manager, "analysis"):
+            try:
+                analyzer = SupercompensationAnalyzer()
+                with console.status("[cyan]Retrying analysis...[/cyan]"):
+                    df = analyzer.analyze(days_back=days)
+                console.print("[green]✅ Analysis complete after re-authentication![/green]")
+                return
+            except Exception as retry_error:
+                console.print(f"[red]❌ Retry failed: {retry_error}[/red]")
+        else:
+            console.print(f"[red]❌ Error analyzing data: {e}[/red]")
 
 
 @cli.command()
@@ -230,6 +301,16 @@ def recommend():
 [bold]Duration:[/bold] {recommendation['duration_minutes']} minutes
 """
 
+        # Add sport-specific activity recommendation
+        if recommendation.get('activity'):
+            rec_text += f"[bold]Recommended Activity:[/bold] {recommendation['activity']}\n"
+
+        if recommendation.get('activity_rationale'):
+            rec_text += f"[bold]Why:[/bold] {recommendation['activity_rationale']}\n"
+
+        if recommendation.get('alternative_activities'):
+            rec_text += f"[bold]Alternatives:[/bold] {', '.join(recommendation['alternative_activities'])}\n"
+
         if recommendation.get('suggested_load'):
             rec_text += f"[bold]Suggested Load:[/bold] {recommendation['suggested_load']:.0f}\n"
 
@@ -247,30 +328,103 @@ def recommend():
 
         console.print(Panel(rec_text, title="🎯 Today's Recommendation", box=box.DOUBLE))
 
-        # Show weekly plan
-        if click.confirm("\nWould you like to see the weekly plan?"):
-            weekly_plan = engine.get_weekly_plan()
-            if weekly_plan:
-                table = Table(title="7-Day Training Plan", box=box.ROUNDED)
-                table.add_column("Day", style="cyan")
-                table.add_column("Date", style="white")
-                table.add_column("Recommendation", style="yellow")
-                table.add_column("Load", style="green")
-                table.add_column("Form", style="magenta")
+        # Show training plan options
+        plan_choice = click.prompt(
+            "\nShow training plan?",
+            type=click.Choice(['no', '7', '30']),
+            default='no',
+            show_choices=True
+        )
 
-                for plan in weekly_plan:
+        if plan_choice != 'no':
+            days = int(plan_choice)
+            training_plan = engine.get_training_plan(days=days)
+
+            if training_plan:
+                title = f"{days}-Day Training Plan"
+                table = Table(title=title, box=box.ROUNDED)
+                table.add_column("Day", style="cyan", width=5)
+                table.add_column("Date", style="white", width=12)
+                table.add_column("Recommendation", style="yellow", width=15)
+                table.add_column("Activity", style="blue", width=50)
+                table.add_column("Load", style="green", width=6)
+                table.add_column("Form", style="magenta", width=6)
+
+                # For 30-day plan, add week separators
+                current_week = -1
+                for plan in training_plan:
+                    week_num = (plan['day'] - 1) // 7
+
+                    # Add week separator for 30-day plan
+                    if days == 30 and week_num != current_week:
+                        current_week = week_num
+                        table.add_section()
+                        table.add_row(
+                            f"[bold]Wk{week_num+1}[/bold]",
+                            "[dim]───────────[/dim]",
+                            "[dim]───────────────[/dim]",
+                            "[dim]──────────────────────────────────────────────[/dim]",
+                            "[dim]────[/dim]",
+                            "[dim]────[/dim]"
+                        )
+
+                    # Color code recommendations
+                    rec_colors = {
+                        "REST": "red",
+                        "RECOVERY": "yellow",
+                        "EASY": "green",
+                        "MODERATE": "cyan",
+                        "HARD": "magenta",
+                        "PEAK": "bold magenta"
+                    }
+                    rec_color = rec_colors.get(plan['recommendation'], "white")
+
+                    # Get full activity name (now we have 50 characters width)
+                    activity = plan.get('activity', 'Unknown')
+                    if len(activity) > 48:
+                        activity = activity[:45] + "..."
+
                     table.add_row(
                         str(plan['day']),
                         plan['date'],
-                        plan['recommendation'],
+                        f"[{rec_color}]{plan['recommendation']}[/{rec_color}]",
+                        f"[blue]{activity}[/blue]",
                         f"{plan['suggested_load']:.0f}",
                         f"{plan['predicted_form']:.1f}",
                     )
 
                 console.print("\n", table)
 
+                # Show summary for 30-day plan
+                if days == 30:
+                    total_load = sum(p['suggested_load'] for p in training_plan)
+                    rest_days = len([p for p in training_plan if p['recommendation'] == 'REST'])
+                    hard_days = len([p for p in training_plan if p['recommendation'] in ['HARD', 'PEAK']])
+
+                    summary = Panel(
+                        f"[bold]Monthly Summary:[/bold]\n"
+                        f"• Total Load: {total_load:.0f} TSS\n"
+                        f"• Average Daily Load: {total_load/30:.0f} TSS\n"
+                        f"• Rest Days: {rest_days}\n"
+                        f"• Hard/Peak Days: {hard_days}\n"
+                        f"• Periodization: 3:1 (3 weeks build, 1 week recovery)",
+                        title="📊 Training Summary",
+                        box=box.ROUNDED
+                    )
+                    console.print("\n", summary)
+
     except Exception as e:
-        console.print(f"[red]❌ Error generating recommendation: {e}[/red]")
+        # Try automatic re-authentication for 401 errors
+        if handle_auth_error(e, auth_manager, "recommendation"):
+            try:
+                engine = RecommendationEngine()
+                recommendation = engine.get_recommendation()
+                console.print("[green]✅ Recommendation generated after re-authentication![/green]")
+                return
+            except Exception as retry_error:
+                console.print(f"[red]❌ Retry failed: {retry_error}[/red]")
+        else:
+            console.print(f"[red]❌ Error generating recommendation: {e}[/red]")
 
 
 @cli.command()

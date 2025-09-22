@@ -177,7 +177,7 @@ def analyze(days):
             table.add_column("Form", style="green")
             table.add_column("Load", style="magenta")
 
-            for h in history[-7:]:  # Show last 7 days
+            for h in history[-14:]:  # Show last 14 days
                 date = datetime.fromisoformat(h['date']).strftime('%m/%d')
                 table.add_row(
                     date,
@@ -565,7 +565,7 @@ def sync(days, data_type):
 
 
 @garmin.command()
-@click.option("--days", default=7, help="Number of days to analyze")
+@click.option("--days", default=14, help="Number of days to analyze")
 def wellness():
     """Show wellness trends and insights."""
     console.print(Panel.fit(f"🧘‍♀️ Wellness Analysis ({days} days)", style="bold blue"))

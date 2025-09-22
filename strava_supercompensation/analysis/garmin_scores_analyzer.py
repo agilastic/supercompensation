@@ -1,4 +1,8 @@
-"""Wellness data analysis for enhanced training recommendations."""
+"""Garmin device scores analysis for training readiness assessment.
+
+This analyzer takes direct scores from Garmin devices (HRV score, sleep score, stress level)
+and calculates a simple weighted readiness score without baseline analysis.
+"""
 
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
@@ -8,8 +12,8 @@ from ..db import get_db
 from ..db.models import HRVData, SleepData, WellnessData
 
 
-class WellnessAnalyzer:
-    """Analyze wellness data to enhance training recommendations."""
+class GarminScoresAnalyzer:
+    """Analyze Garmin device scores for training readiness assessment."""
 
     def __init__(self, user_id: str = "default"):
         self.user_id = user_id
@@ -424,6 +428,11 @@ class WellnessAnalyzer:
             return 0.5   # Reduce load by 50%
 
 
-def get_wellness_analyzer(user_id: str = "default") -> WellnessAnalyzer:
-    """Get wellness analyzer for user."""
-    return WellnessAnalyzer(user_id)
+def get_garmin_scores_analyzer(user_id: str = "default") -> GarminScoresAnalyzer:
+    """Get Garmin scores analyzer for user."""
+    return GarminScoresAnalyzer(user_id)
+
+# Legacy function for backward compatibility
+def get_wellness_analyzer(user_id: str = "default") -> GarminScoresAnalyzer:
+    """Legacy function - use get_garmin_scores_analyzer instead."""
+    return GarminScoresAnalyzer(user_id)

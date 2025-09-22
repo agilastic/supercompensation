@@ -11,6 +11,7 @@ from ..auth import AuthManager
 from ..db import get_db
 from ..db.models import Activity
 from ..analysis.sports_metrics import SportsMetricsCalculator
+from ..analysis.multisport_metrics import MultiSportCalculator
 import numpy as np
 
 
@@ -119,6 +120,7 @@ class StravaClient:
             strava_id=str(data["id"]),
             name=data.get("name"),
             type=data.get("type"),
+            workout_type=data.get("workout_type"),  # 1=Race, 2=Long Run, 3=Workout
             start_date=datetime.fromisoformat(data["start_date"].replace("Z", "+00:00")),
             distance=data.get("distance"),
             moving_time=data.get("moving_time"),
@@ -140,6 +142,7 @@ class StravaClient:
         """Update existing activity with new data."""
         activity.name = data.get("name")
         activity.type = data.get("type")
+        activity.workout_type = data.get("workout_type")
         activity.distance = data.get("distance")
         activity.moving_time = data.get("moving_time")
         activity.elapsed_time = data.get("elapsed_time")
@@ -156,16 +159,21 @@ class StravaClient:
         activity.raw_data = json.dumps(data)
 
     def _calculate_training_load(self, data: Dict[str, Any]) -> float:
-        """Calculate training load using advanced sports science metrics."""
+        """Calculate training load using sport-specific metrics."""
         # Priority 1: Use suffer_score if available (Strava's relative effort)
         if data.get("suffer_score"):
             return float(data["suffer_score"])
 
-        # Initialize sports metrics calculator
-        metrics_calc = SportsMetricsCalculator()
+        # Priority 2: Use multi-sport specific calculation
+        multisport_calc = MultiSportCalculator()
+        sport_specific_load = multisport_calc.calculate_sport_specific_load(data)
 
-        # Priority 2: Calculate TRIMP if heart rate data is available
+        if sport_specific_load > 0:
+            return sport_specific_load
+
+        # Priority 3: Calculate TRIMP if heart rate data is available
         if data.get("average_heartrate") and data.get("moving_time"):
+            metrics_calc = SportsMetricsCalculator()
             duration_minutes = data["moving_time"] / 60
             avg_hr = data["average_heartrate"]
             max_hr = data.get("max_heartrate")
@@ -177,61 +185,16 @@ class StravaClient:
             # TRIMP of 150 ≈ TSS of 100
             return trimp * 0.67
 
-        # Priority 3: Calculate HRSS if we have heart rate
+        # Priority 4: Calculate HRSS if we have heart rate
         if data.get("average_heartrate") and data.get("moving_time"):
+            metrics_calc = SportsMetricsCalculator()
             duration_minutes = data["moving_time"] / 60
             avg_hr = data["average_heartrate"]
             return metrics_calc.calculate_hrss(duration_minutes, avg_hr)
 
-        # Fallback: Simple estimation based on activity type and duration
+        # Fallback: Basic estimation
         duration_hours = (data.get("moving_time", 0) / 3600.0)
-        activity_type = data.get("type", "").lower()
-
-        # Base load per hour by activity type (based on typical intensities)
-        load_per_hour = {
-            "run": 100,
-            "ride": 80,
-            "virtualride": 85,
-            "swim": 120,
-            "walk": 30,
-            "hike": 40,
-            "workout": 70,
-            "weighttraining": 50,
-            "yoga": 20,
-            "rockclimbing": 60,
-            "alpineski": 70,
-            "backcountryski": 90,
-            "nordicski": 80,
-            "rowing": 90,
-            "kayaking": 60,
-            "surfing": 70,
-        }
-
-        base_load = load_per_hour.get(activity_type, 60)
-
-        # Adjust by perceived exertion if no HR data
-        # Use speed/pace as a proxy for intensity
-        if data.get("average_speed") and activity_type in ["run", "ride"]:
-            speed_ms = data["average_speed"]
-            if activity_type == "run":
-                # Running: <3.3 m/s easy, 3.3-4.2 moderate, >4.2 hard
-                if speed_ms < 3.3:
-                    multiplier = 0.7
-                elif speed_ms < 4.2:
-                    multiplier = 1.0
-                else:
-                    multiplier = 1.3
-            else:  # cycling
-                # Cycling: <5.5 m/s easy, 5.5-8.3 moderate, >8.3 hard
-                if speed_ms < 5.5:
-                    multiplier = 0.7
-                elif speed_ms < 8.3:
-                    multiplier = 1.0
-                else:
-                    multiplier = 1.3
-            base_load *= multiplier
-
-        return duration_hours * base_load
+        return duration_hours * 60  # Conservative estimate
 
     def get_recent_activities(self, days: int = 7) -> List[Dict[str, Any]]:
         """Get recent activities from database."""

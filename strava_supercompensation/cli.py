@@ -12,6 +12,7 @@ from .config import config
 from .auth import AuthManager
 from .api import StravaClient
 from .analysis import SupercompensationAnalyzer, RecommendationEngine
+from .analysis.multisport_metrics import MultiSportCalculator
 
 console = Console()
 
@@ -273,6 +274,81 @@ def status():
 
     except Exception as e:
         console.print(f"[red]❌ Database error: {e}[/red]")
+
+
+@cli.command()
+@click.option("--days", default=14, help="Number of days to analyze")
+def multisport(days):
+    """Analyze multi-sport training distribution and recovery."""
+    console.print(Panel.fit(f"🏃‍♀️🚴‍♂️🏊‍♀️ Multi-Sport Analysis ({days} days)", style="bold blue"))
+
+    try:
+        client = StravaClient()
+        activities = client.get_recent_activities(days=days)
+
+        if not activities:
+            console.print("[yellow]No activities found in the specified period.[/yellow]")
+            return
+
+        # Analyze sport distribution
+        multisport_calc = MultiSportCalculator()
+        analysis = multisport_calc.analyze_training_distribution(activities, days)
+
+        # Display sport distribution
+        if analysis["sport_loads"]:
+            table = Table(title="Training Distribution by Sport", box=box.ROUNDED)
+            table.add_column("Sport", style="cyan")
+            table.add_column("Total Load", style="yellow")
+            table.add_column("% of Load", style="green")
+            table.add_column("Hours", style="magenta")
+            table.add_column("% of Time", style="blue")
+
+            for sport, load in analysis["sport_loads"].items():
+                if load > 0:
+                    load_pct = analysis["load_distribution"].get(sport, 0)
+                    hours = analysis["sport_hours"].get(sport, 0)
+                    time_pct = analysis["time_distribution"].get(sport, 0)
+
+                    table.add_row(
+                        sport.replace("_", " ").title(),
+                        f"{load:.0f}",
+                        f"{load_pct:.1f}%",
+                        f"{hours:.1f}h",
+                        f"{time_pct:.1f}%"
+                    )
+
+            console.print(table)
+
+            # Summary stats
+            summary_panel = Panel(
+                f"""
+[bold]Total Training Load:[/bold] {analysis['total_load']:.0f}
+[bold]Total Training Time:[/bold] {analysis['total_hours']:.1f} hours
+[bold]Average Daily Load:[/bold] {analysis['total_load']/days:.0f}
+[bold]Sports Practiced:[/bold] {len([s for s, l in analysis['sport_loads'].items() if l > 0])}
+                """,
+                title="📊 Summary",
+                box=box.ROUNDED,
+            )
+            console.print(summary_panel)
+
+            # Recovery recommendations
+            console.print("\n[bold cyan]🔄 Recovery Recommendations:[/bold cyan]")
+
+            for activity in activities[:3]:  # Show top 3 recent
+                sport_type = multisport_calc.get_sport_type(activity.get("type", ""))
+                cross_training = multisport_calc.get_cross_training_recommendations(
+                    sport_type, activity.get("training_load", 0)
+                )
+
+                if cross_training:
+                    activity_name = activity.get("name", "Unknown")[:30]
+                    console.print(f"\n[dim]After {activity_name}:[/dim]")
+                    for rec in cross_training[:2]:
+                        console.print(f"  • {rec['activity']}: {rec['benefit']} ({rec['duration']})")
+
+    except Exception as e:
+        console.print(f"[red]❌ Error analyzing multi-sport data: {e}[/red]")
 
 
 @cli.command()

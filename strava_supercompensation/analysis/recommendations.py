@@ -7,6 +7,7 @@ from typing import Dict, List, Optional, Tuple
 from ..config import config
 from ..db import get_db
 from ..db.models import Metric, Activity
+from .multisport_metrics import MultiSportCalculator
 
 
 class TrainingRecommendation(Enum):
@@ -88,57 +89,10 @@ class RecommendationEngine:
 
         # PRIORITY 1: Check for recent race or very intense activity
         if recent_activities:
-            days_since_intense = self._days_since_intense_activity(recent_activities)
+            recovery_analysis = self._analyze_recovery_needs(recent_activities)
 
-            if days_since_intense is not None:
-                if days_since_intense == 0:
-                    # Race/intense activity today - absolute rest
-                    return {
-                        "type": TrainingRecommendation.REST.value,
-                        "intensity": "rest",
-                        "duration_minutes": 0,
-                        "notes": [
-                            "Race or very intense activity detected today",
-                            "Complete rest is mandatory",
-                            "Focus on hydration and nutrition"
-                        ],
-                        "metrics": recommendation["metrics"]
-                    }
-                elif days_since_intense == 1:
-                    # Day after race/intense activity - rest or very easy recovery
-                    return {
-                        "type": TrainingRecommendation.REST.value,
-                        "intensity": "rest",
-                        "duration_minutes": 0,
-                        "notes": [
-                            "Recovery day after yesterday's intense effort",
-                            "Complete rest recommended",
-                            "Light walking or stretching only if feeling good"
-                        ],
-                        "metrics": recommendation["metrics"]
-                    }
-                elif days_since_intense == 2:
-                    # Two days after - easy recovery only
-                    return {
-                        "type": TrainingRecommendation.RECOVERY.value,
-                        "intensity": "recovery",
-                        "duration_minutes": 30,
-                        "notes": [
-                            "Still recovering from recent intense effort",
-                            "Keep it very easy",
-                            "Focus on movement quality, not quantity"
-                        ],
-                        "metrics": recommendation["metrics"]
-                    }
-                elif days_since_intense == 3:
-                    # Three days after - can do easy training
-                    recommendation.update({
-                        "type": TrainingRecommendation.EASY.value,
-                        "intensity": "easy",
-                        "duration_minutes": 45,
-                        "notes": ["Gradual return to training after recent intense effort"],
-                    })
-                    # Continue with normal logic but cap at EASY
+            if recovery_analysis["needs_recovery"]:
+                return recovery_analysis["recommendation"]
 
         # Check for very high recent load (last 2 days)
         if recent_loads and len(recent_loads) >= 2:
@@ -246,6 +200,7 @@ class RecommendationEngine:
                 "strava_id": a.strava_id,
                 "name": a.name,
                 "type": a.type,
+                "workout_type": a.workout_type,  # 1=Race flag from Strava
                 "start_date": a.start_date,
                 "distance": a.distance,
                 "moving_time": a.moving_time,
@@ -269,9 +224,14 @@ class RecommendationEngine:
         today = datetime.utcnow().date()
 
         for activity in activities:
-            # Check if it's a race (often has "race" in name)
-            name_lower = (activity.get("name") or "").lower()
-            is_race = any(keyword in name_lower for keyword in ["race", "competition", "marathon", "10k", "5k", "triathlon"])
+            # PRIORITY 1: Check Strava's official workout_type flag
+            # workout_type: 0=Default, 1=Race, 2=Long Run, 3=Workout
+            is_race = activity.get("workout_type") == 1
+
+            # FALLBACK: Check if it's a race by name (if not flagged)
+            if not is_race:
+                name_lower = (activity.get("name") or "").lower()
+                is_race = any(keyword in name_lower for keyword in ["race", "competition", "marathon", "10k", "5k", "triathlon"])
 
             # Check for very high intensity based on various factors
             is_intense = False
@@ -322,6 +282,110 @@ class RecommendationEngine:
                 return days_since
 
         return None
+
+    def _analyze_recovery_needs(self, activities: List[Dict]) -> Dict:
+        """Analyze recovery needs based on recent activities with sport-specific protocols."""
+        multisport_calc = MultiSportCalculator()
+        today = datetime.utcnow().date()
+
+        for activity in activities:
+            # Check if it's a race
+            is_race = activity.get("workout_type") == 1
+            if not is_race:
+                name_lower = (activity.get("name") or "").lower()
+                is_race = any(keyword in name_lower for keyword in ["race", "competition", "marathon", "10k", "5k", "triathlon"])
+
+            # Calculate required recovery time
+            recovery_hours = multisport_calc.calculate_recovery_time(activity)
+
+            # Calculate hours since activity
+            activity_datetime = activity["start_date"]
+            if hasattr(activity_datetime, 'date'):
+                activity_date = activity_datetime.date()
+                activity_dt = activity_datetime
+            else:
+                activity_date = activity_datetime
+                activity_dt = datetime.combine(activity_date, datetime.min.time())
+
+            now = datetime.utcnow()
+            hours_since = (now - activity_dt).total_seconds() / 3600
+
+            # Check if still in recovery period
+            if hours_since < recovery_hours:
+                days_since = int(hours_since / 24)
+                remaining_hours = recovery_hours - hours_since
+
+                # Get sport-specific recommendations
+                sport_type = multisport_calc.get_sport_type(activity.get("type", ""))
+                cross_training = multisport_calc.get_cross_training_recommendations(sport_type, activity.get("training_load", 0))
+
+                if days_since == 0:
+                    # Same day as intense activity
+                    return {
+                        "needs_recovery": True,
+                        "recommendation": {
+                            "type": TrainingRecommendation.REST.value,
+                            "intensity": "rest",
+                            "duration_minutes": 0,
+                            "notes": [
+                                f"Recovery needed after today's {activity.get('type', 'activity')}",
+                                f"Complete rest for {remaining_hours:.0f} more hours",
+                                "Focus on hydration, nutrition, and sleep"
+                            ],
+                            "cross_training": [],
+                            "metrics": {}
+                        }
+                    }
+                elif days_since == 1 and remaining_hours > 12:
+                    # Day after with significant recovery needed
+                    notes = [
+                        f"Recovery day after yesterday's {activity.get('type', 'activity')}",
+                        f"Still need {remaining_hours:.0f} hours of recovery"
+                    ]
+
+                    if is_race:
+                        notes.append("Post-race recovery is critical for adaptation")
+
+                    # Add cross-training options for non-impact sports
+                    if sport_type.value == "running" and len(cross_training) > 0:
+                        notes.append(f"Alternative: {cross_training[0]['activity']} - {cross_training[0]['duration']}")
+
+                    return {
+                        "needs_recovery": True,
+                        "recommendation": {
+                            "type": TrainingRecommendation.REST.value,
+                            "intensity": "rest",
+                            "duration_minutes": 0,
+                            "notes": notes,
+                            "cross_training": cross_training[:2],  # Show top 2 options
+                            "metrics": {}
+                        }
+                    }
+                elif remaining_hours > 0:
+                    # Partial recovery needed
+                    duration = min(30, int(remaining_hours / 2))
+                    notes = [
+                        f"Active recovery phase ({remaining_hours:.0f}h recovery remaining)",
+                        f"Keep intensity very low"
+                    ]
+
+                    # Suggest cross-training if primary sport was high-impact
+                    if sport_type.value == "running" and len(cross_training) > 0:
+                        notes.append(f"Consider: {cross_training[0]['activity']} instead")
+
+                    return {
+                        "needs_recovery": True,
+                        "recommendation": {
+                            "type": TrainingRecommendation.RECOVERY.value,
+                            "intensity": "recovery",
+                            "duration_minutes": duration,
+                            "notes": notes,
+                            "cross_training": cross_training[:3],
+                            "metrics": {}
+                        }
+                    }
+
+        return {"needs_recovery": False, "recommendation": {}}
 
     def _no_data_recommendation(self) -> Dict[str, any]:
         """Recommendation when no data is available."""

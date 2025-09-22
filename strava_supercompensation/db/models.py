@@ -18,6 +18,7 @@ class Activity(Base):
     strava_id = Column(String(50), unique=True, nullable=False)
     name = Column(String(255))
     type = Column(String(50))  # Run, Ride, Swim, etc.
+    workout_type = Column(Integer)  # 0=Default, 1=Race, 2=Long Run, 3=Workout, etc.
     start_date = Column(DateTime, nullable=False)
     distance = Column(Float)  # meters
     moving_time = Column(Integer)  # seconds

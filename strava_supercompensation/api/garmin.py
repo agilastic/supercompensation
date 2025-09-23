@@ -194,25 +194,35 @@ class GarminClient:
 
         print(f"Syncing Garmin data from {start_date} to {end_date}")
         total_days = (end_date - start_date).days + 1
-        days_to_sync = total_days - len(existing_hrv_dates | existing_sleep_dates | existing_wellness_dates)
-        if days_to_sync < total_days:
-            print(f"Found existing data, will skip {total_days - days_to_sync} days with complete data")
 
-        # Sync day by day
+        # Count days that have ALL three data types (truly complete)
+        complete_days = existing_hrv_dates & existing_sleep_dates & existing_wellness_dates
+        days_with_complete_data = len(complete_days)
+
+        # Calculate days that need syncing
+        days_to_process = []
         current_date = start_date
         while current_date <= end_date:
+            needs_hrv = current_date not in existing_hrv_dates
+            needs_sleep = current_date not in existing_sleep_dates
+            needs_wellness = current_date not in existing_wellness_dates
+
+            if needs_hrv or needs_sleep or needs_wellness:
+                days_to_process.append((current_date, needs_hrv, needs_sleep, needs_wellness))
+            current_date += timedelta(days=1)
+
+        # Print summary of what will be synced
+        if len(days_to_process) == 0:
+            print(f"All {total_days} days already have complete data. Nothing to sync.")
+            return results
+        else:
+            print(f"Found {days_with_complete_data} days with complete data")
+            print(f"Will sync {len(days_to_process)} days with missing data")
+
+        # Sync day by day
+        for idx, (sync_date, needs_hrv, needs_sleep, needs_wellness) in enumerate(days_to_process, 1):
             try:
-                # Check what data types need syncing for this date
-                needs_hrv = current_date not in existing_hrv_dates
-                needs_sleep = current_date not in existing_sleep_dates
-                needs_wellness = current_date not in existing_wellness_dates
-
-                # Skip completely if all data types exist for this date
-                if not (needs_hrv or needs_sleep or needs_wellness):
-                    current_date += timedelta(days=1)
-                    continue
-
-                # Only print and process if we actually need to sync something
+                # Build list of data types needed
                 data_types_needed = []
                 if needs_hrv:
                     data_types_needed.append("HRV")
@@ -221,28 +231,27 @@ class GarminClient:
                 if needs_wellness:
                     data_types_needed.append("Wellness")
 
-                print(f"Syncing data for {current_date} ({', '.join(data_types_needed)})")
+                # Show progress
+                print(f"[{idx}/{len(days_to_process)}] Syncing {sync_date} ({', '.join(data_types_needed)})")
 
                 # Get HRV data (skip if already exists)
                 if needs_hrv:
-                    if self._sync_hrv_for_date(current_date):
+                    if self._sync_hrv_for_date(sync_date):
                         results["hrv_synced"] += 1
 
                 # Get sleep data (skip if already exists)
                 if needs_sleep:
-                    if self._sync_sleep_for_date(current_date):
+                    if self._sync_sleep_for_date(sync_date):
                         results["sleep_synced"] += 1
 
                 # Get basic wellness data (skip if already exists)
                 if needs_wellness:
-                    if self._sync_wellness_for_date(current_date):
+                    if self._sync_wellness_for_date(sync_date):
                         results["wellness_synced"] += 1
 
             except Exception as e:
-                print(f"Error syncing {current_date}: {e}")
+                print(f"Error syncing {sync_date}: {e}")
                 results["errors"] += 1
-
-            current_date += timedelta(days=1)
 
         return results
 

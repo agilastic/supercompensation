@@ -36,6 +36,11 @@ class RecommendationEngine:
         self.multisystem_recovery = MultiSystemRecoveryModel()  # Multi-system recovery
         self.environmental_analyzer = EnvironmentalAnalyzer()
 
+        # Initialize sport usage tracking
+        self._plan_sport_usage = {}
+        self._week_sport_usage = {}
+        self._current_plan_days = []
+
     def get_recommendation(self) -> Dict[str, any]:
         """Get training recommendation for today."""
         with self.db.get_session() as session:
@@ -192,39 +197,51 @@ class RecommendationEngine:
 
         # Apply wellness-based modifications early in decision tree
         wellness_modifier = 1.0
-        if wellness_readiness and wellness_readiness.get('readiness_score') is not None:
-            readiness_score = wellness_readiness['readiness_score']
 
-            # Get training load modifier from wellness data
-            wellness_modifier = self.garmin_scores.get_training_load_modifier()
+        # Use refined wellness metrics if available
+        if wellness_readiness:
+            # Prefer refined readiness over device readiness
+            readiness_score = wellness_readiness.get('refined_readiness',
+                                                    wellness_readiness.get('readiness_score', 70))
+            wellness_modifier = wellness_readiness.get('training_modifier', 1.0)
 
-            # Add wellness info to metrics
+            # Add detailed wellness info to metrics
             recommendation["metrics"]["wellness_score"] = round(readiness_score, 1)
             recommendation["metrics"]["wellness_modifier"] = round(wellness_modifier, 2)
 
-            # Early intervention for very poor wellness
-            if readiness_score < 35:
+            # Add individual wellness components if available
+            if 'hrv_score' in wellness_readiness:
+                recommendation["metrics"]["hrv_score"] = wellness_readiness['hrv_score']
+                recommendation["metrics"]["hrv_status"] = wellness_readiness.get('hrv_status', 'unknown')
+            if 'sleep_score' in wellness_readiness:
+                recommendation["metrics"]["sleep_score"] = wellness_readiness['sleep_score']
+            if 'stress_avg' in wellness_readiness:
+                recommendation["metrics"]["stress_avg"] = wellness_readiness['stress_avg']
+
+            # Early intervention based on refined readiness
+            if wellness_modifier == 0.0:  # Complete rest needed
                 return {
                     **recommendation,
                     "type": TrainingRecommendation.REST.value,
                     "intensity": "rest",
                     "duration_minutes": 0,
                     "notes": [
-                        "Poor wellness readiness detected",
-                        f"Readiness score: {readiness_score:.0f}/100",
-                        "Prioritize recovery today"
-                    ] + wellness_readiness.get('recommendations', [])[:2]
+                        f"🚨 Critical wellness state ({readiness_score:.0f}/100)",
+                        "Complete rest required"
+                    ] + wellness_readiness.get('recommendations', [])
                 }
-            elif readiness_score < 50:
-                # Force recovery/easy training regardless of other metrics
+            elif wellness_modifier <= 0.5:  # Significant reduction needed
                 recommendation.update({
                     "type": TrainingRecommendation.RECOVERY.value,
                     "intensity": "recovery",
                     "duration_minutes": max(20, int(30 * wellness_modifier)),
                 })
-                recommendation["notes"].append(f"Wellness score ({readiness_score:.0f}/100) suggests easy training")
+                recommendation["notes"].extend(wellness_readiness.get('recommendations', []))
+            elif wellness_modifier < 1.0:  # Some reduction needed
+                # Add recommendations but don't override type yet
+                recommendation["notes"].append(f"Wellness suggests {int((1-wellness_modifier)*100)}% reduction")
                 if wellness_readiness.get('recommendations'):
-                    recommendation["notes"].extend(wellness_readiness['recommendations'][:1])
+                    recommendation["notes"].extend(wellness_readiness['recommendations'][:2])
 
         # HRV BASELINE ANALYSIS: German sports science methodology
         hrv_baseline_modifier = 1.0
@@ -753,12 +770,167 @@ class RecommendationEngine:
         return {"needs_recovery": False, "recommendation": {}}
 
     def _get_wellness_readiness(self) -> Dict[str, any]:
-        """Get wellness readiness data for today."""
+        """Get comprehensive wellness readiness data including HRV, sleep, and stress."""
+        from ..db.models import HRVData, SleepData, WellnessData
+
+        wellness_data = {}
+
         try:
-            return self.garmin_scores.get_readiness_score()
+            # First try to get Garmin device readiness score
+            device_readiness = self.garmin_scores.get_readiness_score()
+            if device_readiness:
+                wellness_data.update(device_readiness)
         except Exception:
-            # If wellness data isn't available, return None
-            return None
+            pass
+
+        # Now get specific metrics from database for refined analysis
+        with self.db.get_session() as session:
+            # Get latest HRV data
+            latest_hrv = session.query(HRVData).filter_by(
+                user_id=self.user_id
+            ).order_by(HRVData.date.desc()).first()
+
+            # Get latest sleep data
+            latest_sleep = session.query(SleepData).filter_by(
+                user_id=self.user_id
+            ).order_by(SleepData.date.desc()).first()
+
+            # Get latest wellness/stress data
+            latest_wellness = session.query(WellnessData).filter_by(
+                user_id=self.user_id
+            ).order_by(WellnessData.date.desc()).first()
+
+            # Compile comprehensive wellness assessment
+            if latest_hrv:
+                wellness_data['hrv_score'] = latest_hrv.hrv_score
+                wellness_data['hrv_status'] = latest_hrv.hrv_status
+                wellness_data['hrv_date'] = latest_hrv.date
+
+            if latest_sleep:
+                wellness_data['sleep_score'] = latest_sleep.sleep_score
+                wellness_data['sleep_duration'] = latest_sleep.total_sleep_time / 3600 if latest_sleep.total_sleep_time else None
+                wellness_data['sleep_date'] = latest_sleep.date
+
+            if latest_wellness:
+                wellness_data['stress_avg'] = latest_wellness.stress_avg
+                wellness_data['stress_max'] = latest_wellness.stress_max
+                wellness_data['wellness_date'] = latest_wellness.date
+
+        # Calculate refined readiness score based on all metrics
+        if wellness_data:
+            wellness_data['refined_readiness'] = self._calculate_refined_readiness(wellness_data)
+            wellness_data['training_modifier'] = self._calculate_training_modifier(wellness_data)
+            wellness_data['recommendations'] = self._generate_wellness_recommendations(wellness_data)
+
+        return wellness_data if wellness_data else None
+
+    def _calculate_refined_readiness(self, wellness_data: Dict) -> float:
+        """Calculate a refined readiness score from HRV, sleep, and stress metrics."""
+        score_components = []
+        weights = []
+
+        # HRV component (40% weight) - most important indicator
+        if 'hrv_score' in wellness_data and wellness_data['hrv_score'] is not None:
+            hrv_score = wellness_data['hrv_score']
+            score_components.append(hrv_score)
+            weights.append(0.4)
+
+            # Adjust based on HRV status
+            if 'hrv_status' in wellness_data:
+                status = wellness_data['hrv_status']
+                if status == 'unbalanced':
+                    score_components[-1] *= 0.8  # Reduce score for unbalanced
+                elif status == 'low':
+                    score_components[-1] *= 0.6  # Significantly reduce for low HRV
+
+        # Sleep component (35% weight)
+        if 'sleep_score' in wellness_data and wellness_data['sleep_score'] is not None:
+            sleep_score = wellness_data['sleep_score']
+            score_components.append(sleep_score)
+            weights.append(0.35)
+
+            # Consider sleep duration
+            if 'sleep_duration' in wellness_data and wellness_data['sleep_duration']:
+                duration = wellness_data['sleep_duration']
+                if duration < 6:  # Less than 6 hours
+                    score_components[-1] *= 0.7
+                elif duration < 7:  # 6-7 hours
+                    score_components[-1] *= 0.85
+                elif duration > 9:  # More than 9 hours (might indicate fatigue)
+                    score_components[-1] *= 0.9
+
+        # Stress component (25% weight) - inverse relationship
+        if 'stress_avg' in wellness_data and wellness_data['stress_avg'] is not None:
+            stress_avg = wellness_data['stress_avg']
+            # Convert stress to readiness (0-100 stress becomes 100-0 readiness)
+            stress_readiness = max(0, 100 - stress_avg)
+            score_components.append(stress_readiness)
+            weights.append(0.25)
+
+        # Calculate weighted average
+        if score_components:
+            total_weight = sum(weights)
+            weighted_score = sum(s * w for s, w in zip(score_components, weights))
+            return round(weighted_score / total_weight, 1)
+        else:
+            return 70.0  # Default neutral readiness if no data
+
+    def _calculate_training_modifier(self, wellness_data: Dict) -> float:
+        """Calculate a training intensity/volume modifier based on wellness."""
+        refined_readiness = wellness_data.get('refined_readiness', 70)
+
+        # Create training modifier based on readiness thresholds
+        if refined_readiness >= 85:
+            return 1.1  # Can handle 10% more load
+        elif refined_readiness >= 70:
+            return 1.0  # Normal training
+        elif refined_readiness >= 60:
+            return 0.85  # Reduce by 15%
+        elif refined_readiness >= 50:
+            return 0.7  # Reduce by 30%
+        elif refined_readiness >= 40:
+            return 0.5  # Half intensity/volume
+        else:
+            return 0.0  # Rest day recommended
+
+    def _generate_wellness_recommendations(self, wellness_data: Dict) -> List[str]:
+        """Generate specific recommendations based on wellness metrics."""
+        recommendations = []
+        refined_readiness = wellness_data.get('refined_readiness', 70)
+
+        # HRV-based recommendations
+        if 'hrv_status' in wellness_data:
+            status = wellness_data['hrv_status']
+            if status == 'unbalanced':
+                recommendations.append("HRV unbalanced - consider easy aerobic work")
+            elif status == 'low':
+                recommendations.append("Low HRV - prioritize recovery")
+
+        # Sleep-based recommendations
+        if 'sleep_score' in wellness_data:
+            sleep_score = wellness_data['sleep_score']
+            if sleep_score < 60:
+                recommendations.append("Poor sleep quality - reduce training intensity")
+            if 'sleep_duration' in wellness_data:
+                duration = wellness_data['sleep_duration']
+                if duration and duration < 7:
+                    recommendations.append(f"Only {duration:.1f}h sleep - consider afternoon nap")
+
+        # Stress-based recommendations
+        if 'stress_avg' in wellness_data:
+            stress = wellness_data['stress_avg']
+            if stress > 70:
+                recommendations.append("High stress - avoid high-intensity training")
+            elif stress > 50:
+                recommendations.append("Moderate stress - monitor recovery closely")
+
+        # Overall readiness recommendations
+        if refined_readiness < 50:
+            recommendations.insert(0, f"⚠️ Low readiness ({refined_readiness:.0f}/100) - recovery priority")
+        elif refined_readiness > 80:
+            recommendations.insert(0, f"✅ Excellent readiness ({refined_readiness:.0f}/100) - ready for hard training")
+
+        return recommendations
 
     def _no_data_recommendation(self) -> Dict[str, any]:
         """Recommendation when no data is available."""

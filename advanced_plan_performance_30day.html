@@ -1,0 +1,1693 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>30-Day Advanced Training Plan</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/moment@2.29.4/moment.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-moment@1.0.1/dist/chartjs-adapter-moment.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        h1 {
+            color: white;
+            text-align: center;
+            margin-bottom: 30px;
+            font-size: 2.5em;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.2);
+        }
+
+        .dashboard {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .card {
+            background: white;
+            border-radius: 15px;
+            padding: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        .card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 15px 40px rgba(0,0,0,0.15);
+        }
+
+        .card h2 {
+            color: #333;
+            margin-bottom: 15px;
+            font-size: 1.3em;
+            border-bottom: 2px solid #667eea;
+            padding-bottom: 10px;
+        }
+
+        .stat {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 0;
+            border-bottom: 1px solid #eee;
+        }
+
+        .stat:last-child {
+            border-bottom: none;
+        }
+
+        .stat-label {
+            color: #666;
+            font-size: 0.9em;
+        }
+
+        .stat-value {
+            font-size: 1.2em;
+            font-weight: bold;
+            color: #667eea;
+        }
+
+        .chart-container {
+            background: white;
+            border-radius: 15px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+        }
+
+        .calendar {
+            display: grid;
+            grid-template-columns: repeat(7, 1fr);
+            gap: 10px;
+            padding: 20px;
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+        }
+
+        .calendar-header {
+            font-weight: bold;
+            text-align: center;
+            padding: 10px;
+            background: #667eea;
+            color: white;
+            border-radius: 5px;
+        }
+
+        .calendar-day {
+            aspect-ratio: 1;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            position: relative;
+            background: white;
+            border: 2px solid #eee;
+        }
+
+        .calendar-day:hover {
+            transform: scale(1.05);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+        }
+
+        .day-number {
+            font-size: 1.2em;
+            font-weight: bold;
+            color: #333;
+        }
+
+        .day-type {
+            font-size: 0.7em;
+            color: #666;
+            margin-top: 2px;
+        }
+
+        .day-load {
+            font-size: 0.8em;
+            color: #999;
+            margin-top: 2px;
+        }
+
+        /* Workout type colors */
+        .rest { background: #f0f0f0 !important; }
+        .recovery { background: #d4f1d4 !important; }
+        .aerobic { background: #b3e5fc !important; }
+        .tempo { background: #ffcc80 !important; }
+        .threshold { background: #ffab91 !important; }
+        .vo2max { background: #ef9a9a !important; }
+        .intervals { background: #f48fb1 !important; }
+        .long { background: #90caf9 !important; }
+
+        .legend {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 15px;
+            padding: 20px;
+            background: white;
+            border-radius: 15px;
+            margin-top: 20px;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .legend-color {
+            width: 20px;
+            height: 20px;
+            border-radius: 5px;
+        }
+
+        .workout-details {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: white;
+            border-radius: 15px;
+            padding: 30px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            z-index: 1000;
+            display: none;
+            max-width: 500px;
+            width: 90%;
+        }
+
+        .workout-details.active {
+            display: block;
+        }
+
+        .overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.5);
+            z-index: 999;
+            display: none;
+        }
+
+        .overlay.active {
+            display: block;
+        }
+
+        .close-btn {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            cursor: pointer;
+            font-size: 20px;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 30px;
+            background: #f0f0f0;
+            border-radius: 15px;
+            overflow: hidden;
+            margin: 10px 0;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea, #764ba2);
+            transition: width 1s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+        }
+
+        @media (max-width: 768px) {
+            .dashboard {
+                grid-template-columns: 1fr;
+            }
+
+            .calendar {
+                grid-template-columns: repeat(7, 1fr);
+                gap: 5px;
+                padding: 10px;
+            }
+
+            .calendar-day {
+                font-size: 0.8em;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🏃‍♂️ 30-Day Advanced Training Plan 🚴‍♀️</h1>
+
+        <!-- Summary Dashboard -->
+        <div class="dashboard">
+            <div class="card">
+                <h2>Plan Overview</h2>
+                <div class="stat">
+                    <span class="stat-label">Total Load (TSS)</span>
+                    <span class="stat-value" id="total-load">0</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">Duration (hours)</span>
+                    <span class="stat-value" id="total-duration">0</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">Fitness Gain</span>
+                    <span class="stat-value" id="fitness-gain">+0</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">Peak Week</span>
+                    <span class="stat-value" id="peak-week">Week 3</span>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>Intensity Distribution</h2>
+                <canvas id="intensityChart"></canvas>
+            </div>
+
+            <div class="card">
+                <h2>Current Status</h2>
+                <div class="stat">
+                    <span class="stat-label">Fitness (CTL)</span>
+                    <span class="stat-value" id="current-fitness">0</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">Fatigue (ATL)</span>
+                    <span class="stat-value" id="current-fatigue">0</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">Form (TSB)</span>
+                    <span class="stat-value" id="current-form">0</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">Recovery</span>
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="recovery-bar" style="width: 75%">75%</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Main Charts -->
+        <div class="chart-container">
+            <h2>Fitness, Fatigue & Form Progression</h2>
+            <canvas id="progressionChart"></canvas>
+        </div>
+
+        <div class="chart-container">
+            <h2>Daily Training Load Distribution</h2>
+            <canvas id="loadChart"></canvas>
+        </div>
+
+        <!-- Calendar View -->
+        <h2 style="color: white; text-align: center; margin: 20px 0;">Training Calendar</h2>
+        <div class="calendar" id="calendar">
+            <!-- Calendar headers -->
+            <div class="calendar-header">Mon</div>
+            <div class="calendar-header">Tue</div>
+            <div class="calendar-header">Wed</div>
+            <div class="calendar-header">Thu</div>
+            <div class="calendar-header">Fri</div>
+            <div class="calendar-header">Sat</div>
+            <div class="calendar-header">Sun</div>
+            <!-- Calendar days will be populated by JavaScript -->
+        </div>
+
+        <!-- Legend -->
+        <div class="legend">
+            <div class="legend-item">
+                <div class="legend-color rest"></div>
+                <span>Rest</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color recovery"></div>
+                <span>Recovery</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color aerobic"></div>
+                <span>Aerobic</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color tempo"></div>
+                <span>Tempo</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color threshold"></div>
+                <span>Threshold</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color vo2max"></div>
+                <span>VO2 Max</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color intervals"></div>
+                <span>Intervals</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color long"></div>
+                <span>Long</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Workout Details Modal -->
+    <div class="overlay" id="overlay"></div>
+    <div class="workout-details" id="workout-details">
+        <button class="close-btn" onclick="closeDetails()">×</button>
+        <h2 id="detail-title">Workout Details</h2>
+        <div id="detail-content"></div>
+    </div>
+
+    <script>
+        // Sample data - will be replaced with actual plan data
+        const planData = {
+            daily_data: [],
+            fitness_progression: {
+                dates: [],
+                fitness: [],
+                fatigue: [],
+                form: []
+            },
+            summary: {
+                total_load: 0,
+                total_duration_hours: 0,
+                fitness_gain: 0,
+                workout_distribution: {}
+            }
+        };
+
+        // Initialize charts
+        let progressionChart, loadChart, intensityChart;
+
+        function initializeCharts() {
+            // Progression Chart
+            const progressionCtx = document.getElementById('progressionChart').getContext('2d');
+            progressionChart = new Chart(progressionCtx, {
+                type: 'line',
+                data: {
+                    labels: planData.fitness_progression.dates,
+                    datasets: [{
+                        label: 'Fitness (CTL)',
+                        data: planData.fitness_progression.fitness,
+                        borderColor: '#667eea',
+                        backgroundColor: 'rgba(102, 126, 234, 0.1)',
+                        tension: 0.4
+                    }, {
+                        label: 'Fatigue (ATL)',
+                        data: planData.fitness_progression.fatigue,
+                        borderColor: '#ef5350',
+                        backgroundColor: 'rgba(239, 83, 80, 0.1)',
+                        tension: 0.4
+                    }, {
+                        label: 'Form (TSB)',
+                        data: planData.fitness_progression.form,
+                        borderColor: '#66bb6a',
+                        backgroundColor: 'rgba(102, 187, 106, 0.1)',
+                        tension: 0.4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            display: true,
+                            position: 'top'
+                        }
+                    },
+                    scales: {
+                        x: {
+                            type: 'time',
+                            time: {
+                                unit: 'day'
+                            }
+                        },
+                        y: {
+                            beginAtZero: true
+                        }
+                    }
+                }
+            });
+
+            // Load Chart
+            const loadCtx = document.getElementById('loadChart').getContext('2d');
+            loadChart = new Chart(loadCtx, {
+                type: 'bar',
+                data: {
+                    labels: planData.daily_data.map(d => d.date),
+                    datasets: [{
+                        label: 'Training Load (TSS)',
+                        data: planData.daily_data.map(d => d.load),
+                        backgroundColor: planData.daily_data.map(d => getWorkoutColor(d.workout_type)),
+                        borderRadius: 5
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            display: false
+                        }
+                    },
+                    scales: {
+                        x: {
+                            type: 'time',
+                            time: {
+                                unit: 'day'
+                            }
+                        },
+                        y: {
+                            beginAtZero: true,
+                            title: {
+                                display: true,
+                                text: 'Training Load (TSS)'
+                            }
+                        }
+                    }
+                }
+            });
+
+            // Intensity Distribution Chart
+            const intensityCtx = document.getElementById('intensityChart').getContext('2d');
+            intensityChart = new Chart(intensityCtx, {
+                type: 'doughnut',
+                data: {
+                    labels: Object.keys(planData.summary.workout_distribution),
+                    datasets: [{
+                        data: Object.values(planData.summary.workout_distribution),
+                        backgroundColor: [
+                            '#f0f0f0', // rest
+                            '#d4f1d4', // recovery
+                            '#b3e5fc', // aerobic
+                            '#ffcc80', // tempo
+                            '#ffab91', // threshold
+                            '#ef9a9a', // vo2max
+                            '#f48fb1', // intervals
+                            '#90caf9'  // long
+                        ]
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            position: 'bottom'
+                        }
+                    }
+                }
+            });
+        }
+
+        function getWorkoutColor(type) {
+            const colors = {
+                'rest': '#f0f0f0',
+                'recovery': '#d4f1d4',
+                'aerobic': '#b3e5fc',
+                'tempo': '#ffcc80',
+                'threshold': '#ffab91',
+                'vo2max': '#ef9a9a',
+                'intervals': '#f48fb1',
+                'long': '#90caf9'
+            };
+            return colors[type] || '#e0e0e0';
+        }
+
+        function populateCalendar() {
+            const calendar = document.getElementById('calendar');
+
+            // Add empty cells for alignment if needed
+            const firstDay = new Date(planData.daily_data[0].date);
+            const dayOfWeek = firstDay.getDay() || 7; // Convert Sunday (0) to 7
+            for (let i = 1; i < dayOfWeek; i++) {
+                const emptyCell = document.createElement('div');
+                calendar.appendChild(emptyCell);
+            }
+
+            // Add workout days
+            planData.daily_data.forEach((day, index) => {
+                const dayElement = document.createElement('div');
+                dayElement.className = `calendar-day ${day.workout_type}`;
+                dayElement.innerHTML = `
+                    <div class="day-number">${index + 1}</div>
+                    <div class="day-type">${day.workout_type}</div>
+                    <div class="day-load">${Math.round(day.load)} TSS</div>
+                `;
+                dayElement.onclick = () => showWorkoutDetails(day);
+                calendar.appendChild(dayElement);
+            });
+        }
+
+        function showWorkoutDetails(workout) {
+            const overlay = document.getElementById('overlay');
+            const details = document.getElementById('workout-details');
+            const title = document.getElementById('detail-title');
+            const content = document.getElementById('detail-content');
+
+            title.textContent = workout.title || `Day ${workout.day} - ${workout.workout_type}`;
+            content.innerHTML = `
+                <p><strong>Date:</strong> ${new Date(workout.date).toLocaleDateString()}</p>
+                <p><strong>Type:</strong> ${workout.workout_type}</p>
+                <p><strong>Sport:</strong> ${workout.sport}</p>
+                <p><strong>Duration:</strong> ${workout.duration} minutes</p>
+                <p><strong>Load:</strong> ${Math.round(workout.load)} TSS</p>
+                <p><strong>Intensity:</strong> ${workout.intensity}</p>
+                <p><strong>Description:</strong> ${workout.description}</p>
+                <p><strong>Predicted Form:</strong> ${Math.round(workout.form)}</p>
+                <p><strong>Recovery Status:</strong> ${Math.round(workout.recovery)}%</p>
+            `;
+
+            overlay.classList.add('active');
+            details.classList.add('active');
+        }
+
+        function closeDetails() {
+            document.getElementById('overlay').classList.remove('active');
+            document.getElementById('workout-details').classList.remove('active');
+        }
+
+        // Close modal when clicking overlay
+        document.getElementById('overlay').onclick = closeDetails;
+
+        function updateSummary() {
+            document.getElementById('total-load').textContent =
+                Math.round(planData.summary.total_load);
+            document.getElementById('total-duration').textContent =
+                Math.round(planData.summary.total_duration_hours);
+            document.getElementById('fitness-gain').textContent =
+                `+${Math.round(planData.summary.fitness_gain)}`;
+
+            // Update current status
+            const lastDay = planData.daily_data[planData.daily_data.length - 1];
+            if (lastDay) {
+                document.getElementById('current-fitness').textContent =
+                    Math.round(lastDay.fitness);
+                document.getElementById('current-fatigue').textContent =
+                    Math.round(lastDay.fatigue);
+                document.getElementById('current-form').textContent =
+                    Math.round(lastDay.form);
+
+                const recoveryBar = document.getElementById('recovery-bar');
+                const recovery = lastDay.recovery || 75;
+                recoveryBar.style.width = `${recovery}%`;
+                recoveryBar.textContent = `${Math.round(recovery)}%`;
+
+                // Color code recovery
+                if (recovery < 60) {
+                    recoveryBar.style.background = 'linear-gradient(90deg, #ef5350, #e53935)';
+                } else if (recovery < 80) {
+                    recoveryBar.style.background = 'linear-gradient(90deg, #ffa726, #ff9800)';
+                } else {
+                    recoveryBar.style.background = 'linear-gradient(90deg, #66bb6a, #4caf50)';
+                }
+            }
+        }
+
+        // Function to load plan data (to be called from Python)
+        function loadPlanData(data) {
+            planData.daily_data = data.daily_data || [];
+            planData.fitness_progression = data.visualizations.fitness_progression || {};
+            planData.summary = data.summary || {};
+
+            updateSummary();
+            initializeCharts();
+            populateCalendar();
+        }
+
+        // Initialize with sample data on load
+        window.onload = function() {
+            // Sample data for demonstration
+            const sampleData = {
+                daily_data: Array.from({length: 30}, (_, i) => ({
+                    date: new Date(Date.now() + i * 86400000).toISOString(),
+                    day: i + 1,
+                    workout_type: ['rest', 'aerobic', 'tempo', 'threshold', 'recovery'][Math.floor(Math.random() * 5)],
+                    sport: ['Run', 'Ride', 'Swim'][Math.floor(Math.random() * 3)],
+                    load: Math.random() * 100 + 20,
+                    duration: Math.random() * 60 + 30,
+                    intensity: ['easy', 'moderate', 'hard'][Math.floor(Math.random() * 3)],
+                    fitness: 30 + i * 2,
+                    fatigue: 20 + i * 1.5,
+                    form: 10 + i * 0.5,
+                    recovery: 60 + Math.random() * 40,
+                    title: `Workout Day ${i + 1}`,
+                    description: 'Sample workout description'
+                })),
+                visualizations: {
+                    fitness_progression: {
+                        dates: Array.from({length: 30}, (_, i) =>
+                            new Date(Date.now() + i * 86400000).toISOString()),
+                        fitness: Array.from({length: 30}, (_, i) => 30 + i * 2),
+                        fatigue: Array.from({length: 30}, (_, i) => 20 + i * 1.5),
+                        form: Array.from({length: 30}, (_, i) => 10 + i * 0.5)
+                    }
+                },
+                summary: {
+                    total_load: 2100,
+                    total_duration_hours: 35,
+                    fitness_gain: 60,
+                    workout_distribution: {
+                        rest: 4,
+                        recovery: 6,
+                        aerobic: 8,
+                        tempo: 6,
+                        threshold: 4,
+                        vo2max: 2
+                    }
+                }
+            };
+
+            loadPlanData({
+  "mesocycle": "Mesocycle(cycle_type=<MesocycleType.INTENSIFICATION: 'intensification'>, start_date=datetime.date(2025, 9, 23), end_date=datetime.date(2025, 10, 21), weeks=[], weekly_loads=[70, 80, 85, 50], load_pattern='3:1', easy_percentage=0.5, moderate_percentage=0.25, hard_percentage=0.25, primary_goal='Improve power and speed', expected_fitness_gain=28.5, expected_fatigue_peak=85, key_workouts=[], test_workout=None)",
+  "daily_workouts": [
+    "WorkoutPlan(date=datetime.date(2025, 9, 23), day_number=0, week_number=1, mesocycle=<MesocycleType.INTENSIFICATION: 'intensification'>, workout_type=<WorkoutType.TEMPO: 'tempo'>, primary_sport='Ride', alternative_sports=['Run', 'Swim'], planned_load=np.float64(39.199999999999996), intensity_level='moderate', hr_zones={'z1': 10, 'z2': 30, 'z3': 50, 'z4': 10, 'z5': 0}, total_duration_min=26, warmup_min=10, main_set_min=6, cooldown_min=10, title='Tempo Ride', description='Steady tempo effort for 26 min. Stay at threshold pace. TSS: 56 (reduced load for recovery)', workout_structure={'warmup': 10, 'main': 6, 'cooldown': 10, 'sets': [{'duration': 6, 'intensity': 'moderate'}]}, primary_system='aerobic', secondary_systems=['anaerobic'], expected_adaptations=['lactate_threshold', 'glycogen_storage'], recovery_hours_needed=20, next_day_recommendation='Normal training can continue', predicted_fitness=np.float64(56.0), predicted_fatigue=np.float64(56.0), predicted_form=np.float64(0.0), overtraining_risk=0.0, can_skip=False, can_move=True, priority=7)",
+    "WorkoutPlan(date=datetime.date(2025, 9, 24), day_number=1, week_number=1, mesocycle=<MesocycleType.INTENSIFICATION: 'intensification'>, workout_type=<WorkoutType.THRESHOLD: 'threshold'>, primary_sport='Run', alternative_sports=['Ride', 'Swim'], planned_load=np.float64(70.0), intensity_level='hard', hr_zones={'z1': 10, 'z2': 20, 'z3': 40, 'z4': 30, 'z5': 0}, total_duration_min=29, warmup_min=5, main_set_min=20, cooldown_min=4, title='Threshold Run', description='Threshold workout for 29 min. TSS: 70', workout_structure={'warmup': 5, 'main': 20, 'cooldown': 4, 'sets': []}, primary_system='anaerobic', secondary_systems=['aerobic', 'neuromuscular'], expected_adaptations=['lactate_buffering', 'vo2max'], recovery_hours_needed=31, next_day_recommendation='Normal training can continue', predicted_fitness=np.float64(124.68241445252562), predicted_fatigue=np.float64(118.54516238601016), predicted_form=np.float64(6.137252066515458), overtraining_risk=0.0, can_skip=False, can_move=True, priority=8)",
+    "WorkoutPlan(date=datetime.date(2025, 9, 25), day_number=2, week_number=1, mesocycle=<MesocycleType.INTENSIFICATION: 'intensification'>, workout_type=<WorkoutType.RECOVERY: 'recovery'>, primary_sport='Hike', alternative_sports=['Run', 'Ride'], planned_load=np.float64(31.5), intensity_level='moderate', hr_zones={'z1': 10, 'z2': 30, 'z3': 50, 'z4': 10, 'z5': 0}, total_duration_min=30, warmup_min=10, main_set_min=10, cooldown_min=10, title='Tempo Hike', description='Modified to recovery due to overtraining risk', workout_structure={'warmup': 10, 'main': 10, 'cooldown': 10, 'sets': [{'duration': 10, 'intensity': 'moderate'}]}, primary_system='aerobic', secondary_systems=['anaerobic'], expected_adaptations=['lactate_threshold', 'glycogen_storage'], recovery_hours_needed=22, next_day_recommendation='Normal training can continue', predicted_fitness=np.float64(184.7488475363317), predicted_fatigue=np.float64(165.76418139472872), predicted_form=np.float64(18.984666141602986), overtraining_risk=1.0, can_skip=False, can_move=True, priority=7)",
+    "WorkoutPlan(date=datetime.date(2025, 9, 26), day_number=3, week_number=1, mesocycle=<MesocycleType.INTENSIFICATION: 'intensification'>, workout_type=<WorkoutType.RECOVERY: 'recovery'>, primary_sport='WeightTraining', alternative_sports=['Run', 'Ride'], planned_load=np.float64(38.5), intensity_level='hard', hr_zones={'z1': 10, 'z2': 20, 'z3': 40, 'z4': 30, 'z5': 0}, total_duration_min=32, warmup_min=6, main_set_min=22, cooldown_min=5, title='Threshold WeightTraining', description='Modified to recovery due to overtraining risk', workout_structure={'warmup': 6, 'main': 22, 'cooldown': 5, 'sets': []}, primary_system='anaerobic', secondary_systems=['aerobic', 'neuromuscular'], expected_adaptations=['lactate_buffering', 'vo2max'], recovery_hours_needed=34, next_day_recommendation='Normal training can continue', predicted_fitness=np.float64(257.40201876085996), predicted_fatigue=np.float64(220.69730542127058), predicted_form=np.float64(36.704713339589375), overtraining_risk=1.0, can_skip=False, can_move=True, priority=8)",
+    "WorkoutPlan(date=datetime.date(2025, 9, 27), day_number=4, week_number=1, mesocycle=<MesocycleType.INTENSIFICATION: 'intensification'>, workout_type=<WorkoutType.RECOVERY: 'recovery'>, primary_sport='InlineSkate', alternative_sports=['Run', 'Ride'], planned_load=np.float64(24.5), intensity_level='easy', hr_zones={'z1': 20, 'z2': 70, 'z3': 10, 'z4': 0, 'z5': 0}, total_duration_min=29, warmup_min=5, main_set_min=20, cooldown_min=4, title='Aerobic InlineSkate', description='Modified to recovery due to overtraining risk', workout_structure={'warmup': 5, 'main': 20, 'cooldown': 4, 'sets': []}, primary_system='aerobic', secondary_systems=[], expected_adaptations=['mitochondrial_density', 'capillarization'], recovery_hours_needed=14, next_day_recommendation='Normal training can continue', predicted_fitness=np.float64(300.3457834071093), predicted_fatigue=np.float64(240.31761660411541), predicted_form=np.float64(60.028166802993894), overtraining_risk=1.0, can_skip=False, can_move=True, priority=5)",
+    "WorkoutPlan(date=datetime.date(2025, 9, 28), day_number=5, week_number=1, mesocycle=<MesocycleType.INTENSIFICATION: 'intensification'>, workout_type=<WorkoutType.RECOVERY: 'recovery'>, primary_sport='Ride', alternative_sports=['Run', 'Swim'], planned_load=np.float64(42.0), intensity_level='hard', hr_zones={'z1': 10, 'z2': 20, 'z3': 40, 'z4': 30, 'z5': 0}, total_duration_min=35, warmup_min=7, main_set_min=24, cooldown_min=5, title='Threshold Ride', description='Modified to recovery due to overtraining risk', workout_structure={'warmup': 7, 'main': 24, 'cooldown': 5, 'sets': []}, primary_system='anaerobic', secondary_systems=['aerobic', 'neuromuscular'], expected_adaptations=['lactate_buffering', 'vo2max'], recovery_hours_needed=37, next_day_recommendation='Normal training can continue', predicted_fitness=np.float64(377.2791537024293), predicted_fatigue=np.float64(292.3260307547449), predicted_form=np.float64(84.95312294768439), overtraining_risk=1.0, can_skip=False, can_move=True, priority=8)",
+    "WorkoutPlan(date=datetime.date(2025, 9, 29), day_number=6, week_number=1, mesocycle=<MesocycleType.INTENSIFICATION: 'intensification'>, workout_type=<WorkoutType.RECOVERY: 'recovery'>, primary_sport='Run', alternative_sports=['Ride', 'Swim'], planned_load=np.float64(0.0), intensity_level='rest', hr_zones={'z1': 100, 'z2': 0, 'z3': 0, 'z4': 0, 'z5': 0}, total_duration_min=0, warmup_min=0, main_set_min=0, cooldown_min=0, title='Rest Day', description='Modified to recovery due to overtraining risk', workout_structure={'warmup': 0, 'main': 0, 'cooldown': 0, 'sets': []}, primary_system='recovery', secondary_systems=[], expected_adaptations=['general_fitness'], recovery_hours_needed=0, next_day_recommendation='Normal training can continue', predicted_fitness=np.float64(368.40241155454214), predicted_fatigue=np.float64(253.41097558298029), predicted_form=np.float64(114.99143597156186), overtraining_risk=1.0, can_skip=False, can_move=True, priority=3)",
+    "WorkoutPlan(date=datetime.date(2025, 9, 30), day_number=7, week_number=2, mesocycle=<MesocycleType.INTENSIFICATION: 'intensification'>, workout_type=<WorkoutType.RECOVERY: 'recovery'>, primary_sport='Hike', alternative_sports=['Run', 'Ride'], planned_load=np.float64(32.0), intensity_level='moderate', hr_zones={'z1': 10, 'z2': 30, 'z3': 50, 'z4': 10, 'z5': 0}, total_duration_min=30, warmup_min=10, main_set_min=10, cooldown_min=10, title='Tempo Hike', description='Modified to recovery due to overtraining risk', workout_structure={'warmup': 10, 'main': 10, 'cooldown': 10, 'sets': [{'duration': 10, 'intensity': 'moderate'}]}, primary_system='aerobic', secondary_systems=['anaerobic'], expected_adaptations=['lactate_threshold', 'glycogen_storage'], recovery_hours_needed=23, next_day_recommendation='Normal training can continue', predicted_fitness=np.float64(423.7345241774176), predicted_fatigue=np.float64(283.6763742870186), predicted_form=np.float64(140.05814989039902), overtraining_risk=1.0, can_skip=False, can_move=True, priority=7)",
+    "WorkoutPlan(date=datetime.date(2025, 10, 1), day_number=8, week_number=2, mesocycle=<MesocycleType.INTENSIFICATION: 'intensification'>, workout_type=<WorkoutType.RECOVERY: 'recovery'>, primary_sport='WeightTraining', alternative_sports=['Run', 'Ride'], planned_load=np.float64(40.0), intensity_level='hard', hr_zones={'z1': 10, 'z2': 20, 'z3': 40, 'z4': 30, 'z5': 0}, total_duration_min=33, warmup_min=6, main_set_min=22, cooldown_min=5, title='Threshold WeightTraining', description='Modified to recovery due to overtraining risk', workout_structure={'warmup': 6, 'main': 22, 'cooldown': 5, 'sets': []}, primary_system='anaerobic', secondary_systems=['aerobic', 'neuromuscular'], expected_adaptations=['lactate_buffering', 'vo2max'], recovery_hours_needed=36, next_day_recommendation='Normal training can continue', predicted_fitness=np.float64(493.76476551630867), predicted_fatigue=np.float64(325.91277955067704), predicted_form=np.float64(167.85198596563163), overtraining_risk=1.0, can_skip=False, can_move=True, priority=8)",
+    "WorkoutPlan(date=datetime.date(2025, 10, 2), day_number=9, week_number=2, mesocycle=<MesocycleType.INTENSIFICATION: 'intensification'>, workout_type=<WorkoutType.RECOVERY: 'recovery'>, primary_sport='InlineSkate', alternative_sports=['Run', 'Ride'], planned_load=np.float64(36.0), intensity_level='hard', hr_zones={'z1': 10, 'z2': 20, 'z3': 40, 'z4': 30, 'z5': 0}, total_duration_min=30, warmup_min=6, main_set_min=20, cooldown_min=5, title='Threshold InlineSkate', description='Modified to recovery due to overtraining risk', workout_structure={'warmup': 6, 'main': 20, 'cooldown': 5, 'sets': []}, primary_system='anaerobic', secondary_systems=['aerobic', 'neuromuscular'], expected_adaptations=['lactate_buffering', 'vo2max'], recovery_hours_needed=32, next_day_recommendation='Normal training can continue', predicted_fitness=np.float64(554.1473133931593), predicted_fatigue=np.float64(354.5265858386349), predicted_form=np.float64(199.62072755452436), overtraining_risk=1.0, can_skip=False, can_move=True, priority=8)",
+    "WorkoutPlan(date=datetime.date(2025, 10, 3), day_number=10, week_number=2, mesocycle=<MesocycleType.INTENSIFICATION: 'intensification'>, workout_type=<WorkoutType.RECOVERY: 'recovery'>, primary_sport='Ride', alternative_sports=['Run', 'Swim'], planned_load=np.float64(44.0), intensity_level='hard', hr_zones={'z1': 10, 'z2': 20, 'z3': 40, 'z4': 30, 'z5': 0}, total_duration_min=36, warmup_min=7, main_set_min=24, cooldown_min=5, title='Threshold Ride', description='Modified to recovery due to overtraining risk', workout_structure={'warmup': 7, 'main': 24, 'cooldown': 5, 'sets': []}, primary_system='anaerobic', secondary_systems=['aerobic', 'neuromuscular'], expected_adaptations=['lactate_buffering', 'vo2max'], recovery_hours_needed=39, next_day_recommendation='Normal training can continue', predicted_fitness=np.float64(629.1091617628275), predicted_fatigue=np.float64(395.33126213739826), predicted_form=np.float64(233.77789962542926), overtraining_risk=1.0, can_skip=False, can_move=True, priority=8)",
+    "WorkoutPlan(date=datetime.date(2025, 10, 4), day_number=11, week_number=2, mesocycle=<MesocycleType.INTENSIFICATION: 'intensification'>, workout_type=<WorkoutType.RECOVERY: 'recovery'>, primary_sport='Run', alternative_sports=['Ride', 'Swim'], planned_load=np.float64(28.0), intensity_level='moderate', hr_zones={'z1': 10, 'z2': 30, 'z3': 50, 'z4': 10, 'z5': 0}, total_duration_min=26, warmup_min=10, main_set_min=6, cooldown_min=10, title='Tempo Run', description='Modified to recovery due to overtraining risk', workout_structure={'warmup': 10, 'main': 6, 'cooldown': 10, 'sets': [{'duration': 6, 'intensity': 'moderate'}]}, primary_system='aerobic', secondary_systems=['anaerobic'], expected_adaptations=['lactate_threshold', 'glycogen_storage'], recovery_hours_needed=20, next_day_recommendation='Normal training can continue', predicted_fitness=np.float64(670.3072842749272), predicted_fatigue=np.float64(398.7039342272563), predicted_form=np.float64(271.60335004767086), overtraining_risk=1.0, can_skip=False, can_move=True, priority=7)",
+    "WorkoutPlan(date=datetime.date(2025, 10, 5), day_number=12, week_number=2, mesocycle=<MesocycleType.INTENSIFICATION: 'intensification'>, workout_type=<WorkoutType.RECOVERY: 'recovery'>, primary_sport='Hike', alternative_sports=['Run', 'Ride'], planned_load=np.float64(48.0), intensity_level='peak', hr_zones={'z1': 10, 'z2': 10, 'z3': 20, 'z4': 40, 'z5': 20}, total_duration_min=34, warmup_min=6, main_set_min=23, cooldown_min=5, title='VO2max Hike', description='Modified to recovery due to overtraining risk', workout_structure={'warmup': 6, 'main': 23, 'cooldown': 5, 'sets': []}, primary_system='anaerobic', secondary_systems=['aerobic', 'neuromuscular'], expected_adaptations=['vo2max', 'cardiac_output'], recovery_hours_needed=57, next_day_recommendation='Easy recovery or rest recommended', predicted_fitness=np.float64(750.5360844512227), predicted_fatigue=np.float64(441.62762912505855), predicted_form=np.float64(308.90845532616413), overtraining_risk=1.0, can_skip=False, can_move=True, priority=9)",
+    "WorkoutPlan(date=datetime.date(2025, 10, 6), day_number=13, week_number=2, mesocycle=<MesocycleType.INTENSIFICATION: 'intensification'>, workout_type=<WorkoutType.RECOVERY: 'recovery'>, primary_sport='WeightTraining', alternative_sports=['Run', 'Ride'], planned_load=np.float64(0.0), intensity_level='rest', hr_zones={'z1': 100, 'z2': 0, 'z3': 0, 'z4': 0, 'z5': 0}, total_duration_min=0, warmup_min=0, main_set_min=0, cooldown_min=0, title='Rest Day', description='Modified to recovery due to overtraining risk', workout_structure={'warmup': 0, 'main': 0, 'cooldown': 0, 'sets': []}, primary_system='recovery', secondary_systems=[], expected_adaptations=['general_fitness'], recovery_hours_needed=0, next_day_recommendation='Normal training can continue', predicted_fitness=np.float64(732.877236277456), predicted_fatigue=np.float64(382.8372316075829), predicted_form=np.float64(350.04000466987304), overtraining_risk=1.0, can_skip=False, can_move=True, priority=3)",
+    "WorkoutPlan(date=datetime.date(2025, 10, 7), day_number=14, week_number=3, mesocycle=<MesocycleType.INTENSIFICATION: 'intensification'>, workout_type=<WorkoutType.RECOVERY: 'recovery'>, primary_sport='InlineSkate', alternative_sports=['Run', 'Ride'], planned_load=np.float64(34.0), intensity_level='moderate', hr_zones={'z1': 10, 'z2': 30, 'z3': 50, 'z4': 10, 'z5': 0}, total_duration_min=32, warmup_min=10, main_set_min=12, cooldown_min=10, title='Tempo InlineSkate', description='Modified to recovery due to overtraining risk', workout_structure={'warmup': 10, 'main': 12, 'cooldown': 10, 'sets': [{'duration': 12, 'intensity': 'moderate'}]}, primary_system='aerobic', secondary_systems=['anaerobic'], expected_adaptations=['lactate_threshold', 'glycogen_storage'], recovery_hours_needed=24, next_day_recommendation='Normal training can continue', predicted_fitness=np.float64(783.6338710168819), predicted_fatigue=np.float64(399.8731352821553), predicted_form=np.float64(383.7607357347266), overtraining_risk=1.0, can_skip=False, can_move=True, priority=8)",
+    "WorkoutPlan(date=datetime.date(2025, 10, 8), day_number=15, week_number=3, mesocycle=<MesocycleType.INTENSIFICATION: 'intensification'>, workout_type=<WorkoutType.RECOVERY: 'recovery'>, primary_sport='Ride', alternative_sports=['Run', 'Swim'], planned_load=np.float64(42.5), intensity_level='hard', hr_zones={'z1': 10, 'z2': 20, 'z3': 40, 'z4': 30, 'z5': 0}, total_duration_min=35, warmup_min=7, main_set_min=24, cooldown_min=5, title='Threshold Ride', description='Modified to recovery due to overtraining risk', workout_structure={'warmup': 7, 'main': 24, 'cooldown': 5, 'sets': []}, primary_system='anaerobic', secondary_systems=['aerobic', 'neuromuscular'], expected_adaptations=['lactate_buffering', 'vo2max'], recovery_hours_needed=38, next_day_recommendation='Normal training can continue', predicted_fitness=np.float64(850.1962877496811), predicted_fatigue=np.float64(431.641183679915), predicted_form=np.float64(418.5551040697661), overtraining_risk=1.0, can_skip=False, can_move=True, priority=9)",
+    "WorkoutPlan(date=datetime.date(2025, 10, 9), day_number=16, week_number=3, mesocycle=<MesocycleType.INTENSIFICATION: 'intensification'>, workout_type=<WorkoutType.RECOVERY: 'recovery'>, primary_sport='Run', alternative_sports=['Ride', 'Swim'], planned_load=np.float64(38.25), intensity_level='hard', hr_zones={'z1': 10, 'z2': 20, 'z3': 40, 'z4': 30, 'z5': 0}, total_duration_min=32, warmup_min=6, main_set_min=22, cooldown_min=5, title='Threshold Run', description='Modified to recovery due to overtraining risk', workout_structure={'warmup': 6, 'main': 22, 'cooldown': 5, 'sets': []}, primary_system='anaerobic', secondary_systems=['aerobic', 'neuromuscular'], expected_adaptations=['lactate_buffering', 'vo2max'], recovery_hours_needed=34, next_day_recommendation='Normal training can continue', predicted_fitness=np.float64(906.692603084407), predicted_fatigue=np.float64(450.68020275412715), predicted_form=np.float64(456.01240033027983), overtraining_risk=1.0, can_skip=False, can_move=True, priority=9)",
+    "WorkoutPlan(date=datetime.date(2025, 10, 10), day_number=17, week_number=3, mesocycle=<MesocycleType.INTENSIFICATION: 'intensification'>, workout_type=<WorkoutType.RECOVERY: 'recovery'>, primary_sport='Hike', alternative_sports=['Run', 'Ride'], planned_load=np.float64(46.75000000000001), intensity_level='peak', hr_zones={'z1': 10, 'z2': 10, 'z3': 20, 'z4': 40, 'z5': 20}, total_duration_min=33, warmup_min=6, main_set_min=22, cooldown_min=5, title='VO2max Hike', description='Modified to recovery due to overtraining risk', workout_structure={'warmup': 6, 'main': 22, 'cooldown': 5, 'sets': []}, primary_system='anaerobic', secondary_systems=['aerobic', 'neuromuscular'], expected_adaptations=['vo2max', 'cardiac_output'], recovery_hours_needed=56, next_day_recommendation='Easy recovery or rest recommended', predicted_fitness=np.float64(978.8596554089438), predicted_fatigue=np.float64(484.18470762248376), predicted_form=np.float64(494.67494778646005), overtraining_risk=1.0, can_skip=False, can_move=True, priority=10)",
+    "WorkoutPlan(date=datetime.date(2025, 10, 11), day_number=18, week_number=3, mesocycle=<MesocycleType.INTENSIFICATION: 'intensification'>, workout_type=<WorkoutType.RECOVERY: 'recovery'>, primary_sport='WeightTraining', alternative_sports=['Run', 'Ride'], planned_load=np.float64(29.749999999999996), intensity_level='moderate', hr_zones={'z1': 10, 'z2': 30, 'z3': 50, 'z4': 10, 'z5': 0}, total_duration_min=28, warmup_min=10, main_set_min=8, cooldown_min=10, title='Tempo WeightTraining', description='Modified to recovery due to overtraining risk', workout_structure={'warmup': 10, 'main': 8, 'cooldown': 10, 'sets': [{'duration': 8, 'intensity': 'moderate'}]}, primary_system='aerobic', secondary_systems=['anaerobic'], expected_adaptations=['lactate_threshold', 'glycogen_storage'], recovery_hours_needed=21, next_day_recommendation='Normal training can continue', predicted_fitness=np.float64(1015.3287387130051), predicted_fatigue=np.float64(479.22902243493445), predicted_form=np.float64(536.0997162780707), overtraining_risk=1.0, can_skip=False, can_move=True, priority=8)",
+    "WorkoutPlan(date=datetime.date(2025, 10, 12), day_number=19, week_number=3, mesocycle=<MesocycleType.INTENSIFICATION: 'intensification'>, workout_type=<WorkoutType.RECOVERY: 'recovery'>, primary_sport='InlineSkate', alternative_sports=['Run', 'Ride'], planned_load=np.float64(51.0), intensity_level='peak', hr_zones={'z1': 10, 'z2': 10, 'z3': 20, 'z4': 40, 'z5': 20}, total_duration_min=36, warmup_min=7, main_set_min=24, cooldown_min=5, title='VO2max InlineSkate', description='Modified to recovery due to overtraining risk', workout_structure={'warmup': 7, 'main': 24, 'cooldown': 5, 'sets': []}, primary_system='anaerobic', secondary_systems=['aerobic', 'neuromuscular'], expected_adaptations=['vo2max', 'cardiac_output'], recovery_hours_needed=61, next_day_recommendation='Easy recovery or rest recommended', predicted_fitness=np.float64(1093.439765997583), predicted_fatigue=np.float64(517.4330484677287), predicted_form=np.float64(576.0067175298543), overtraining_risk=1.0, can_skip=False, can_move=True, priority=10)",
+    "WorkoutPlan(date=datetime.date(2025, 10, 13), day_number=20, week_number=3, mesocycle=<MesocycleType.INTENSIFICATION: 'intensification'>, workout_type=<WorkoutType.RECOVERY: 'recovery'>, primary_sport='Ride', alternative_sports=['Run', 'Swim'], planned_load=np.float64(0.0), intensity_level='rest', hr_zones={'z1': 100, 'z2': 0, 'z3': 0, 'z4': 0, 'z5': 0}, total_duration_min=0, warmup_min=0, main_set_min=0, cooldown_min=0, title='Rest Day', description='Modified to recovery due to overtraining risk', workout_structure={'warmup': 0, 'main': 0, 'cooldown': 0, 'sets': []}, primary_system='recovery', secondary_systems=[], expected_adaptations=['general_fitness'], recovery_hours_needed=0, next_day_recommendation='Normal training can continue', predicted_fitness=np.float64(1067.712972556294), predicted_fatigue=np.float64(448.5512743170385), predicted_form=np.float64(619.1616982392555), overtraining_risk=1.0, can_skip=False, can_move=True, priority=4)",
+    "WorkoutPlan(date=datetime.date(2025, 10, 14), day_number=21, week_number=4, mesocycle=<MesocycleType.INTENSIFICATION: 'intensification'>, workout_type=<WorkoutType.RECOVERY: 'recovery'>, primary_sport='Run', alternative_sports=['Ride', 'Swim'], planned_load=np.float64(20.0), intensity_level='easy', hr_zones={'z1': 20, 'z2': 70, 'z3': 10, 'z4': 0, 'z5': 0}, total_duration_min=24, warmup_min=4, main_set_min=16, cooldown_min=4, title='Aerobic Run', description='Modified to recovery due to overtraining risk', workout_structure={'warmup': 4, 'main': 16, 'cooldown': 4, 'sets': []}, primary_system='aerobic', secondary_systems=[], expected_adaptations=['mitochondrial_density', 'capillarization'], recovery_hours_needed=12, next_day_recommendation='Normal training can continue', predicted_fitness=np.float64(1082.5914871725245), predicted_fatigue=np.float64(428.83918661022193), predicted_form=np.float64(653.7523005623025), overtraining_risk=1.0, can_skip=False, can_move=True, priority=5)",
+    "WorkoutPlan(date=datetime.date(2025, 10, 15), day_number=22, week_number=4, mesocycle=<MesocycleType.INTENSIFICATION: 'intensification'>, workout_type=<WorkoutType.RECOVERY: 'recovery'>, primary_sport='Hike', alternative_sports=['Run', 'Ride'], planned_load=np.float64(25.0), intensity_level='moderate', hr_zones={'z1': 10, 'z2': 30, 'z3': 50, 'z4': 10, 'z5': 0}, total_duration_min=24, warmup_min=10, main_set_min=4, cooldown_min=10, title='Tempo Hike', description='Modified to recovery due to overtraining risk', workout_structure={'warmup': 10, 'main': 4, 'cooldown': 10, 'sets': [{'duration': 4, 'intensity': 'moderate'}]}, primary_system='aerobic', secondary_systems=['anaerobic'], expected_adaptations=['lactate_threshold', 'glycogen_storage'], recovery_hours_needed=18, next_day_recommendation='Normal training can continue', predicted_fitness=np.float64(1107.1199354347152), predicted_fatigue=np.float64(421.75121341924546), predicted_form=np.float64(685.3687220154698), overtraining_risk=1.0, can_skip=False, can_move=True, priority=7)",
+    "WorkoutPlan(date=datetime.date(2025, 10, 16), day_number=23, week_number=4, mesocycle=<MesocycleType.INTENSIFICATION: 'intensification'>, workout_type=<WorkoutType.RECOVERY: 'recovery'>, primary_sport='WeightTraining', alternative_sports=['Run', 'Ride'], planned_load=np.float64(22.5), intensity_level='easy', hr_zones={'z1': 20, 'z2': 70, 'z3': 10, 'z4': 0, 'z5': 0}, total_duration_min=27, warmup_min=5, main_set_min=18, cooldown_min=4, title='Aerobic WeightTraining', description='Modified to recovery due to overtraining risk', workout_structure={'warmup': 5, 'main': 18, 'cooldown': 4, 'sets': []}, primary_system='aerobic', secondary_systems=[], expected_adaptations=['mitochondrial_density', 'capillarization'], recovery_hours_needed=13, next_day_recommendation='Normal training can continue', predicted_fitness=np.float64(1126.0712706802592), predicted_fatigue=np.float64(410.6068061059661), predicted_form=np.float64(715.4644645742931), overtraining_risk=1.0, can_skip=False, can_move=True, priority=5)",
+    "WorkoutPlan(date=datetime.date(2025, 10, 17), day_number=24, week_number=4, mesocycle=<MesocycleType.INTENSIFICATION: 'intensification'>, workout_type=<WorkoutType.RECOVERY: 'recovery'>, primary_sport='InlineSkate', alternative_sports=['Run', 'Ride'], planned_load=np.float64(27.500000000000004), intensity_level='moderate', hr_zones={'z1': 10, 'z2': 30, 'z3': 50, 'z4': 10, 'z5': 0}, total_duration_min=26, warmup_min=10, main_set_min=6, cooldown_min=10, title='Tempo InlineSkate', description='Modified to recovery due to overtraining risk', workout_structure={'warmup': 10, 'main': 6, 'cooldown': 10, 'sets': [{'duration': 6, 'intensity': 'moderate'}]}, primary_system='aerobic', secondary_systems=['anaerobic'], expected_adaptations=['lactate_threshold', 'glycogen_storage'], recovery_hours_needed=19, next_day_recommendation='Normal training can continue', predicted_fitness=np.float64(1154.5767129717874), predicted_fatigue=np.float64(410.94596570026994), predicted_form=np.float64(743.6307472715175), overtraining_risk=1.0, can_skip=False, can_move=True, priority=7)",
+    "WorkoutPlan(date=datetime.date(2025, 10, 18), day_number=25, week_number=4, mesocycle=<MesocycleType.INTENSIFICATION: 'intensification'>, workout_type=<WorkoutType.RECOVERY: 'recovery'>, primary_sport='Ride', alternative_sports=['Run', 'Swim'], planned_load=np.float64(17.5), intensity_level='easy', hr_zones={'z1': 20, 'z2': 70, 'z3': 10, 'z4': 0, 'z5': 0}, total_duration_min=21, warmup_min=4, main_set_min=14, cooldown_min=3, title='Aerobic Ride', description='Modified to recovery due to overtraining risk', workout_structure={'warmup': 4, 'main': 14, 'cooldown': 3, 'sets': []}, primary_system='aerobic', secondary_systems=[], expected_adaptations=['mitochondrial_density', 'capillarization'], recovery_hours_needed=10, next_day_recommendation='Normal training can continue', predicted_fitness=np.float64(1162.4114702849643), predicted_fatigue=np.float64(391.2399756570602), predicted_form=np.float64(771.171494627904), overtraining_risk=1.0, can_skip=False, can_move=True, priority=5)",
+    "WorkoutPlan(date=datetime.date(2025, 10, 19), day_number=26, week_number=4, mesocycle=<MesocycleType.INTENSIFICATION: 'intensification'>, workout_type=<WorkoutType.RECOVERY: 'recovery'>, primary_sport='Run', alternative_sports=['Ride', 'Swim'], planned_load=np.float64(30.0), intensity_level='moderate', hr_zones={'z1': 10, 'z2': 30, 'z3': 50, 'z4': 10, 'z5': 0}, total_duration_min=28, warmup_min=10, main_set_min=8, cooldown_min=10, title='Tempo Run', description='Modified to recovery due to overtraining risk', workout_structure={'warmup': 10, 'main': 8, 'cooldown': 10, 'sets': [{'duration': 8, 'intensity': 'moderate'}]}, primary_system='aerobic', secondary_systems=['anaerobic'], expected_adaptations=['lactate_threshold', 'glycogen_storage'], recovery_hours_needed=21, next_day_recommendation='Normal training can continue', predicted_fitness=np.float64(1195.0618889730727), predicted_fatigue=np.float64(399.1572883959046), predicted_form=np.float64(795.9046005771681), overtraining_risk=1.0, can_skip=False, can_move=True, priority=7)",
+    "WorkoutPlan(date=datetime.date(2025, 10, 20), day_number=27, week_number=4, mesocycle=<MesocycleType.INTENSIFICATION: 'intensification'>, workout_type=<WorkoutType.RECOVERY: 'recovery'>, primary_sport='Hike', alternative_sports=['Run', 'Ride'], planned_load=np.float64(0.0), intensity_level='rest', hr_zones={'z1': 100, 'z2': 0, 'z3': 0, 'z4': 0, 'z5': 0}, total_duration_min=0, warmup_min=0, main_set_min=0, cooldown_min=0, title='Rest Day', description='Modified to recovery due to overtraining risk', workout_structure={'warmup': 0, 'main': 0, 'cooldown': 0, 'sets': []}, primary_system='recovery', secondary_systems=[], expected_adaptations=['general_fitness'], recovery_hours_needed=0, next_day_recommendation='Normal training can continue', predicted_fitness=np.float64(1166.9440983793525), predicted_fatigue=np.float64(346.0206318346193), predicted_form=np.float64(820.9234665447332), overtraining_risk=1.0, can_skip=False, can_move=True, priority=3)",
+    "WorkoutPlan(date=datetime.date(2025, 10, 21), day_number=28, week_number=5, mesocycle=<MesocycleType.INTENSIFICATION: 'intensification'>, workout_type=<WorkoutType.RECOVERY: 'recovery'>, primary_sport='WeightTraining', alternative_sports=['Run', 'Ride'], planned_load=np.float64(20.0), intensity_level='easy', hr_zones={'z1': 20, 'z2': 70, 'z3': 10, 'z4': 0, 'z5': 0}, total_duration_min=24, warmup_min=4, main_set_min=16, cooldown_min=4, title='Aerobic WeightTraining', description='Modified to recovery due to overtraining risk', workout_structure={'warmup': 4, 'main': 16, 'cooldown': 4, 'sets': []}, primary_system='aerobic', secondary_systems=[], expected_adaptations=['mitochondrial_density', 'capillarization'], recovery_hours_needed=12, next_day_recommendation='Normal training can continue', predicted_fitness=np.float64(1179.4878719733672), predicted_fatigue=np.float64(339.9576385950255), predicted_form=np.float64(839.5302333783417), overtraining_risk=1.0, can_skip=False, can_move=True, priority=5)",
+    "WorkoutPlan(date=datetime.date(2025, 10, 22), day_number=29, week_number=5, mesocycle=<MesocycleType.INTENSIFICATION: 'intensification'>, workout_type=<WorkoutType.RECOVERY: 'recovery'>, primary_sport='InlineSkate', alternative_sports=['Run', 'Ride'], planned_load=np.float64(25.0), intensity_level='moderate', hr_zones={'z1': 10, 'z2': 30, 'z3': 50, 'z4': 10, 'z5': 0}, total_duration_min=24, warmup_min=10, main_set_min=4, cooldown_min=10, title='Tempo InlineSkate', description='Modified to recovery due to overtraining risk', workout_structure={'warmup': 10, 'main': 4, 'cooldown': 10, 'sets': [{'duration': 4, 'intensity': 'moderate'}]}, primary_system='aerobic', secondary_systems=['anaerobic'], expected_adaptations=['lactate_threshold', 'glycogen_storage'], recovery_hours_needed=18, next_day_recommendation='Normal training can continue', predicted_fitness=np.float64(1201.736511731699), predicted_fatigue=np.float64(344.70176374928707), predicted_form=np.float64(857.034747982412), overtraining_risk=1.0, can_skip=False, can_move=True, priority=7)"
+  ],
+  "simulated_response": {
+    "fitness": "[  56.          124.68241445  184.74884754  257.40201876  300.34578341\n  377.2791537   368.40241155  423.73452418  493.76476552  554.14731339\n  629.10916176  670.30728427  750.53608445  732.87723628  783.63387102\n  850.19628775  906.69260308  978.85965541 1015.32873871 1093.439766\n 1067.71297256 1082.59148717 1107.11993543 1126.07127068 1154.57671297\n 1162.41147028 1195.06188897 1166.94409838 1179.48787197 1201.73651173]",
+    "fatigue": "[ 56.         118.54516239 165.76418139 220.69730542 240.3176166\n 292.32603075 253.41097558 283.67637429 325.91277955 354.52658584\n 395.33126214 398.70393423 441.62762913 382.83723161 399.87313528\n 431.64118368 450.68020275 484.18470762 479.22902243 517.43304847\n 448.55127432 428.83918661 421.75121342 410.60680611 410.9459657\n 391.23997566 399.1572884  346.02063183 339.9576386  344.70176375]",
+    "performance": "[  1.32         3.49149106   6.36298355  10.11965311  14.01057735\n  18.78948906  22.51693491  26.88224997  31.89605349  37.23364085\n  43.17331019  48.91458119  55.36882088  60.36274533  65.76157307\n  71.61608928  77.6154641   84.08493632  90.19953789  96.9496686\n 102.04528022 106.83962882 111.44033257 115.73180581 119.9635314\n 123.70052371 127.56883585 130.25893262 132.92868778 135.64924747]",
+    "form": "[  0.           6.13725207  18.98466614  36.70471334  60.0281668\n  84.95312295 114.99143597 140.05814989 167.85198597 199.62072755\n 233.77789963 271.60335005 308.90845533 350.04000467 383.76073573\n 418.55510407 456.01240033 494.67494779 536.09971628 576.00671753\n 619.16169824 653.75230056 685.36872202 715.46446457 743.63074727\n 771.17149463 795.90460058 820.92346654 839.53023338 857.03474798]",
+    "perpot_performance": "[0.2        0.2647619  0.19519274 0.         0.         0.\n 0.         0.         0.         0.         0.         0.\n 0.         0.         0.         0.         0.         0.\n 0.         0.         0.         0.         0.         0.\n 0.         0.         0.         0.         0.         0.        ]",
+    "overtraining_risk": "[False False  True  True  True  True  True  True  True  True  True  True\n  True  True  True  True  True  True  True  True  True  True  True  True\n  True  True  True  True  True  True]",
+    "recovery_status": "[[  0.           0.           0.        ]\n [ 66.96428571  89.28571429  26.15118025]\n [ 53.57142857  71.42857143  20.9209442 ]\n [ 59.52380952  79.36507937  23.24549356]\n [ 48.7012987   64.93506494  19.01904018]\n [ 76.53061224 100.          29.88706314]\n [ 44.64285714  59.52380952  17.43412017]\n [  0.           0.           0.        ]\n [ 58.59375     78.125       22.88228272]\n [ 46.875       62.5         18.30582618]\n [ 52.08333333  69.44444444  20.33980686]\n [ 42.61363636  56.81818182  16.64166016]\n [ 66.96428571  89.28571429  26.15118025]\n [ 39.0625      52.08333333  15.25485515]\n [  0.           0.           0.        ]\n [ 55.14705882  73.52941176  21.53626609]\n [ 44.11764706  58.82352941  17.22901287]\n [ 49.01960784  65.35947712  19.14334763]\n [ 40.10695187  53.47593583  15.66273897]\n [ 63.02521008  84.03361345  24.61287553]\n [ 37.5         50.          14.64466094]\n [  0.           0.           0.        ]\n [ 93.75       100.          36.61165235]\n [ 75.         100.          29.28932188]\n [ 83.33333333 100.          32.54369098]\n [ 68.18181818  90.90909091  26.62665626]\n [100.         100.          41.8418884 ]\n [ 62.5         83.33333333  24.40776823]\n [  0.           0.           0.        ]\n [ 93.75       100.          36.61165235]]",
+    "overall_recovery": "[   0.         2615.11802512 2092.0944201  2324.54935566 1901.90401827\n 2988.70631442 1743.41201675    0.         2288.22827198 1830.58261758\n 2033.9806862  1664.16601599 2615.11802512 1525.48551465    0.\n 2153.62660892 1722.90128714 1914.33476349 1566.2738974  2461.28755305\n 1464.46609407    0.         3661.16523517 2928.93218813 3254.36909793\n 2662.66562558 4184.18884019 2440.77682345    0.         3661.16523517]"
+  },
+  "visualizations": {
+    "daily_data": [
+      {
+        "date": "2025-09-23",
+        "day": 1,
+        "week": 1,
+        "workout_type": "tempo",
+        "sport": "Ride",
+        "load": 39.199999999999996,
+        "duration": 26,
+        "intensity": "moderate",
+        "fitness": 56.0,
+        "fatigue": 56.0,
+        "form": 0.0,
+        "recovery": 0.0,
+        "overtraining_risk": 0.0,
+        "title": "Tempo Ride",
+        "description": "Steady tempo effort for 26 min. Stay at threshold pace. TSS: 56 (reduced load for recovery)"
+      },
+      {
+        "date": "2025-09-24",
+        "day": 2,
+        "week": 1,
+        "workout_type": "threshold",
+        "sport": "Run",
+        "load": 70.0,
+        "duration": 29,
+        "intensity": "hard",
+        "fitness": 124.68241445252562,
+        "fatigue": 118.54516238601016,
+        "form": 6.137252066515458,
+        "recovery": 2615.1180251201104,
+        "overtraining_risk": 0.0,
+        "title": "Threshold Run",
+        "description": "Threshold workout for 29 min. TSS: 70"
+      },
+      {
+        "date": "2025-09-25",
+        "day": 3,
+        "week": 1,
+        "workout_type": "recovery",
+        "sport": "Hike",
+        "load": 31.5,
+        "duration": 30,
+        "intensity": "moderate",
+        "fitness": 184.7488475363317,
+        "fatigue": 165.76418139472872,
+        "form": 18.984666141602986,
+        "recovery": 2092.094420096089,
+        "overtraining_risk": 1.0,
+        "title": "Tempo Hike",
+        "description": "Modified to recovery due to overtraining risk"
+      },
+      {
+        "date": "2025-09-26",
+        "day": 4,
+        "week": 1,
+        "workout_type": "recovery",
+        "sport": "WeightTraining",
+        "load": 38.5,
+        "duration": 32,
+        "intensity": "hard",
+        "fitness": 257.40201876085996,
+        "fatigue": 220.69730542127058,
+        "form": 36.704713339589375,
+        "recovery": 2324.5493556623205,
+        "overtraining_risk": 1.0,
+        "title": "Threshold WeightTraining",
+        "description": "Modified to recovery due to overtraining risk"
+      },
+      {
+        "date": "2025-09-27",
+        "day": 5,
+        "week": 1,
+        "workout_type": "recovery",
+        "sport": "InlineSkate",
+        "load": 24.5,
+        "duration": 29,
+        "intensity": "easy",
+        "fitness": 300.3457834071093,
+        "fatigue": 240.31761660411541,
+        "form": 60.028166802993894,
+        "recovery": 1901.9040182691715,
+        "overtraining_risk": 1.0,
+        "title": "Aerobic InlineSkate",
+        "description": "Modified to recovery due to overtraining risk"
+      },
+      {
+        "date": "2025-09-28",
+        "day": 6,
+        "week": 1,
+        "workout_type": "recovery",
+        "sport": "Ride",
+        "load": 42.0,
+        "duration": 35,
+        "intensity": "hard",
+        "fitness": 377.2791537024293,
+        "fatigue": 292.3260307547449,
+        "form": 84.95312294768439,
+        "recovery": 2988.7063144229837,
+        "overtraining_risk": 1.0,
+        "title": "Threshold Ride",
+        "description": "Modified to recovery due to overtraining risk"
+      },
+      {
+        "date": "2025-09-29",
+        "day": 7,
+        "week": 1,
+        "workout_type": "recovery",
+        "sport": "Run",
+        "load": 0.0,
+        "duration": 0,
+        "intensity": "rest",
+        "fitness": 368.40241155454214,
+        "fatigue": 253.41097558298029,
+        "form": 114.99143597156186,
+        "recovery": 1743.4120167467406,
+        "overtraining_risk": 1.0,
+        "title": "Rest Day",
+        "description": "Modified to recovery due to overtraining risk"
+      },
+      {
+        "date": "2025-09-30",
+        "day": 8,
+        "week": 2,
+        "workout_type": "recovery",
+        "sport": "Hike",
+        "load": 32.0,
+        "duration": 30,
+        "intensity": "moderate",
+        "fitness": 423.7345241774176,
+        "fatigue": 283.6763742870186,
+        "form": 140.05814989039902,
+        "recovery": 0.0,
+        "overtraining_risk": 1.0,
+        "title": "Tempo Hike",
+        "description": "Modified to recovery due to overtraining risk"
+      },
+      {
+        "date": "2025-10-01",
+        "day": 9,
+        "week": 2,
+        "workout_type": "recovery",
+        "sport": "WeightTraining",
+        "load": 40.0,
+        "duration": 33,
+        "intensity": "hard",
+        "fitness": 493.76476551630867,
+        "fatigue": 325.91277955067704,
+        "form": 167.85198596563163,
+        "recovery": 2288.228271980097,
+        "overtraining_risk": 1.0,
+        "title": "Threshold WeightTraining",
+        "description": "Modified to recovery due to overtraining risk"
+      },
+      {
+        "date": "2025-10-02",
+        "day": 10,
+        "week": 2,
+        "workout_type": "recovery",
+        "sport": "InlineSkate",
+        "load": 36.0,
+        "duration": 30,
+        "intensity": "hard",
+        "fitness": 554.1473133931593,
+        "fatigue": 354.5265858386349,
+        "form": 199.62072755452436,
+        "recovery": 1830.5826175840775,
+        "overtraining_risk": 1.0,
+        "title": "Threshold InlineSkate",
+        "description": "Modified to recovery due to overtraining risk"
+      },
+      {
+        "date": "2025-10-03",
+        "day": 11,
+        "week": 2,
+        "workout_type": "recovery",
+        "sport": "Ride",
+        "load": 44.0,
+        "duration": 36,
+        "intensity": "hard",
+        "fitness": 629.1091617628275,
+        "fatigue": 395.33126213739826,
+        "form": 233.77789962542926,
+        "recovery": 2033.9806862045307,
+        "overtraining_risk": 1.0,
+        "title": "Threshold Ride",
+        "description": "Modified to recovery due to overtraining risk"
+      },
+      {
+        "date": "2025-10-04",
+        "day": 12,
+        "week": 2,
+        "workout_type": "recovery",
+        "sport": "Run",
+        "load": 28.0,
+        "duration": 26,
+        "intensity": "moderate",
+        "fitness": 670.3072842749272,
+        "fatigue": 398.7039342272563,
+        "form": 271.60335004767086,
+        "recovery": 1664.1660159855248,
+        "overtraining_risk": 1.0,
+        "title": "Tempo Run",
+        "description": "Modified to recovery due to overtraining risk"
+      },
+      {
+        "date": "2025-10-05",
+        "day": 13,
+        "week": 2,
+        "workout_type": "recovery",
+        "sport": "Hike",
+        "load": 48.0,
+        "duration": 34,
+        "intensity": "peak",
+        "fitness": 750.5360844512227,
+        "fatigue": 441.62762912505855,
+        "form": 308.90845532616413,
+        "recovery": 2615.1180251201104,
+        "overtraining_risk": 1.0,
+        "title": "VO2max Hike",
+        "description": "Modified to recovery due to overtraining risk"
+      },
+      {
+        "date": "2025-10-06",
+        "day": 14,
+        "week": 2,
+        "workout_type": "recovery",
+        "sport": "WeightTraining",
+        "load": 0.0,
+        "duration": 0,
+        "intensity": "rest",
+        "fitness": 732.877236277456,
+        "fatigue": 382.8372316075829,
+        "form": 350.04000466987304,
+        "recovery": 1525.485514653398,
+        "overtraining_risk": 1.0,
+        "title": "Rest Day",
+        "description": "Modified to recovery due to overtraining risk"
+      },
+      {
+        "date": "2025-10-07",
+        "day": 15,
+        "week": 3,
+        "workout_type": "recovery",
+        "sport": "InlineSkate",
+        "load": 34.0,
+        "duration": 32,
+        "intensity": "moderate",
+        "fitness": 783.6338710168819,
+        "fatigue": 399.8731352821553,
+        "form": 383.7607357347266,
+        "recovery": 0.0,
+        "overtraining_risk": 1.0,
+        "title": "Tempo InlineSkate",
+        "description": "Modified to recovery due to overtraining risk"
+      },
+      {
+        "date": "2025-10-08",
+        "day": 16,
+        "week": 3,
+        "workout_type": "recovery",
+        "sport": "Ride",
+        "load": 42.5,
+        "duration": 35,
+        "intensity": "hard",
+        "fitness": 850.1962877496811,
+        "fatigue": 431.641183679915,
+        "form": 418.5551040697661,
+        "recovery": 2153.626608922444,
+        "overtraining_risk": 1.0,
+        "title": "Threshold Ride",
+        "description": "Modified to recovery due to overtraining risk"
+      },
+      {
+        "date": "2025-10-09",
+        "day": 17,
+        "week": 3,
+        "workout_type": "recovery",
+        "sport": "Run",
+        "load": 38.25,
+        "duration": 32,
+        "intensity": "hard",
+        "fitness": 906.692603084407,
+        "fatigue": 450.68020275412715,
+        "form": 456.01240033027983,
+        "recovery": 1722.9012871379553,
+        "overtraining_risk": 1.0,
+        "title": "Threshold Run",
+        "description": "Modified to recovery due to overtraining risk"
+      },
+      {
+        "date": "2025-10-10",
+        "day": 18,
+        "week": 3,
+        "workout_type": "recovery",
+        "sport": "Hike",
+        "load": 46.75000000000001,
+        "duration": 33,
+        "intensity": "peak",
+        "fitness": 978.8596554089438,
+        "fatigue": 484.18470762248376,
+        "form": 494.67494778646005,
+        "recovery": 1914.334763486617,
+        "overtraining_risk": 1.0,
+        "title": "VO2max Hike",
+        "description": "Modified to recovery due to overtraining risk"
+      },
+      {
+        "date": "2025-10-11",
+        "day": 19,
+        "week": 3,
+        "workout_type": "recovery",
+        "sport": "WeightTraining",
+        "load": 29.749999999999996,
+        "duration": 28,
+        "intensity": "moderate",
+        "fitness": 1015.3287387130051,
+        "fatigue": 479.22902243493445,
+        "form": 536.0997162780707,
+        "recovery": 1566.2738973981411,
+        "overtraining_risk": 1.0,
+        "title": "Tempo WeightTraining",
+        "description": "Modified to recovery due to overtraining risk"
+      },
+      {
+        "date": "2025-10-12",
+        "day": 20,
+        "week": 3,
+        "workout_type": "recovery",
+        "sport": "InlineSkate",
+        "load": 51.0,
+        "duration": 36,
+        "intensity": "peak",
+        "fitness": 1093.439765997583,
+        "fatigue": 517.4330484677287,
+        "form": 576.0067175298543,
+        "recovery": 2461.2875530542224,
+        "overtraining_risk": 1.0,
+        "title": "VO2max InlineSkate",
+        "description": "Modified to recovery due to overtraining risk"
+      },
+      {
+        "date": "2025-10-13",
+        "day": 21,
+        "week": 3,
+        "workout_type": "recovery",
+        "sport": "Ride",
+        "load": 0.0,
+        "duration": 0,
+        "intensity": "rest",
+        "fitness": 1067.712972556294,
+        "fatigue": 448.5512743170385,
+        "form": 619.1616982392555,
+        "recovery": 1464.466094067262,
+        "overtraining_risk": 1.0,
+        "title": "Rest Day",
+        "description": "Modified to recovery due to overtraining risk"
+      },
+      {
+        "date": "2025-10-14",
+        "day": 22,
+        "week": 4,
+        "workout_type": "recovery",
+        "sport": "Run",
+        "load": 20.0,
+        "duration": 24,
+        "intensity": "easy",
+        "fitness": 1082.5914871725245,
+        "fatigue": 428.83918661022193,
+        "form": 653.7523005623025,
+        "recovery": 0.0,
+        "overtraining_risk": 1.0,
+        "title": "Aerobic Run",
+        "description": "Modified to recovery due to overtraining risk"
+      },
+      {
+        "date": "2025-10-15",
+        "day": 23,
+        "week": 4,
+        "workout_type": "recovery",
+        "sport": "Hike",
+        "load": 25.0,
+        "duration": 24,
+        "intensity": "moderate",
+        "fitness": 1107.1199354347152,
+        "fatigue": 421.75121341924546,
+        "form": 685.3687220154698,
+        "recovery": 3661.165235168155,
+        "overtraining_risk": 1.0,
+        "title": "Tempo Hike",
+        "description": "Modified to recovery due to overtraining risk"
+      },
+      {
+        "date": "2025-10-16",
+        "day": 24,
+        "week": 4,
+        "workout_type": "recovery",
+        "sport": "WeightTraining",
+        "load": 22.5,
+        "duration": 27,
+        "intensity": "easy",
+        "fitness": 1126.0712706802592,
+        "fatigue": 410.6068061059661,
+        "form": 715.4644645742931,
+        "recovery": 2928.932188134524,
+        "overtraining_risk": 1.0,
+        "title": "Aerobic WeightTraining",
+        "description": "Modified to recovery due to overtraining risk"
+      },
+      {
+        "date": "2025-10-17",
+        "day": 25,
+        "week": 4,
+        "workout_type": "recovery",
+        "sport": "InlineSkate",
+        "load": 27.500000000000004,
+        "duration": 26,
+        "intensity": "moderate",
+        "fitness": 1154.5767129717874,
+        "fatigue": 410.94596570026994,
+        "form": 743.6307472715175,
+        "recovery": 3254.369097927249,
+        "overtraining_risk": 1.0,
+        "title": "Tempo InlineSkate",
+        "description": "Modified to recovery due to overtraining risk"
+      },
+      {
+        "date": "2025-10-18",
+        "day": 26,
+        "week": 4,
+        "workout_type": "recovery",
+        "sport": "Ride",
+        "load": 17.5,
+        "duration": 21,
+        "intensity": "easy",
+        "fitness": 1162.4114702849643,
+        "fatigue": 391.2399756570602,
+        "form": 771.171494627904,
+        "recovery": 2662.66562557684,
+        "overtraining_risk": 1.0,
+        "title": "Aerobic Ride",
+        "description": "Modified to recovery due to overtraining risk"
+      },
+      {
+        "date": "2025-10-19",
+        "day": 27,
+        "week": 4,
+        "workout_type": "recovery",
+        "sport": "Run",
+        "load": 30.0,
+        "duration": 28,
+        "intensity": "moderate",
+        "fitness": 1195.0618889730727,
+        "fatigue": 399.1572883959046,
+        "form": 795.9046005771681,
+        "recovery": 4184.188840192178,
+        "overtraining_risk": 1.0,
+        "title": "Tempo Run",
+        "description": "Modified to recovery due to overtraining risk"
+      },
+      {
+        "date": "2025-10-20",
+        "day": 28,
+        "week": 4,
+        "workout_type": "recovery",
+        "sport": "Hike",
+        "load": 0.0,
+        "duration": 0,
+        "intensity": "rest",
+        "fitness": 1166.9440983793525,
+        "fatigue": 346.0206318346193,
+        "form": 820.9234665447332,
+        "recovery": 2440.776823445437,
+        "overtraining_risk": 1.0,
+        "title": "Rest Day",
+        "description": "Modified to recovery due to overtraining risk"
+      },
+      {
+        "date": "2025-10-21",
+        "day": 29,
+        "week": 5,
+        "workout_type": "recovery",
+        "sport": "WeightTraining",
+        "load": 20.0,
+        "duration": 24,
+        "intensity": "easy",
+        "fitness": 1179.4878719733672,
+        "fatigue": 339.9576385950255,
+        "form": 839.5302333783417,
+        "recovery": 0.0,
+        "overtraining_risk": 1.0,
+        "title": "Aerobic WeightTraining",
+        "description": "Modified to recovery due to overtraining risk"
+      },
+      {
+        "date": "2025-10-22",
+        "day": 30,
+        "week": 5,
+        "workout_type": "recovery",
+        "sport": "InlineSkate",
+        "load": 25.0,
+        "duration": 24,
+        "intensity": "moderate",
+        "fitness": 1201.736511731699,
+        "fatigue": 344.70176374928707,
+        "form": 857.034747982412,
+        "recovery": 3661.165235168155,
+        "overtraining_risk": 1.0,
+        "title": "Tempo InlineSkate",
+        "description": "Modified to recovery due to overtraining risk"
+      }
+    ],
+    "weekly_summary": [
+      {
+        "week": 1,
+        "total_load": 245.7,
+        "total_duration": 181,
+        "hard_days": 3,
+        "easy_days": 1,
+        "avg_fitness": 238.4086613448283,
+        "avg_fatigue": 192.43732459197855,
+        "avg_form": 45.97133675284971
+      },
+      {
+        "week": 2,
+        "total_load": 228.0,
+        "total_duration": 189,
+        "hard_days": 3,
+        "easy_days": 0,
+        "avg_fitness": 607.7823385504742,
+        "avg_fatigue": 368.94511382480374,
+        "avg_form": 238.83722472567032
+      },
+      {
+        "week": 3,
+        "total_load": 242.25,
+        "total_duration": 196,
+        "hard_days": 2,
+        "easy_days": 0,
+        "avg_fitness": 956.5519849323994,
+        "avg_fatigue": 458.7989392226261,
+        "avg_form": 497.75304570977335
+      },
+      {
+        "week": 4,
+        "total_load": 142.5,
+        "total_duration": 150,
+        "hard_days": 0,
+        "easy_days": 3,
+        "avg_fitness": 1142.110980556668,
+        "avg_fatigue": 401.2230096747554,
+        "avg_form": 740.8879708819125
+      },
+      {
+        "week": 5,
+        "total_load": 45.0,
+        "total_duration": 48,
+        "hard_days": 0,
+        "easy_days": 1,
+        "avg_fitness": 1190.6121918525332,
+        "avg_fatigue": 342.3297011721563,
+        "avg_form": 848.2824906803769
+      }
+    ],
+    "load_distribution": {
+      "dates": [
+        "2025-09-23",
+        "2025-09-24",
+        "2025-09-25",
+        "2025-09-26",
+        "2025-09-27",
+        "2025-09-28",
+        "2025-09-29",
+        "2025-09-30",
+        "2025-10-01",
+        "2025-10-02",
+        "2025-10-03",
+        "2025-10-04",
+        "2025-10-05",
+        "2025-10-06",
+        "2025-10-07",
+        "2025-10-08",
+        "2025-10-09",
+        "2025-10-10",
+        "2025-10-11",
+        "2025-10-12",
+        "2025-10-13",
+        "2025-10-14",
+        "2025-10-15",
+        "2025-10-16",
+        "2025-10-17",
+        "2025-10-18",
+        "2025-10-19",
+        "2025-10-20",
+        "2025-10-21",
+        "2025-10-22"
+      ],
+      "loads": [
+        39.199999999999996,
+        70.0,
+        31.5,
+        38.5,
+        24.5,
+        42.0,
+        0.0,
+        32.0,
+        40.0,
+        36.0,
+        44.0,
+        28.0,
+        48.0,
+        0.0,
+        34.0,
+        42.5,
+        38.25,
+        46.75000000000001,
+        29.749999999999996,
+        51.0,
+        0.0,
+        20.0,
+        25.0,
+        22.5,
+        27.500000000000004,
+        17.5,
+        30.0,
+        0.0,
+        20.0,
+        25.0
+      ]
+    },
+    "intensity_distribution": {
+      "easy": 5,
+      "moderate": 10,
+      "hard": 8,
+      "peak": 3,
+      "rest": 4
+    },
+    "fitness_progression": {
+      "dates": [
+        "2025-09-23",
+        "2025-09-24",
+        "2025-09-25",
+        "2025-09-26",
+        "2025-09-27",
+        "2025-09-28",
+        "2025-09-29",
+        "2025-09-30",
+        "2025-10-01",
+        "2025-10-02",
+        "2025-10-03",
+        "2025-10-04",
+        "2025-10-05",
+        "2025-10-06",
+        "2025-10-07",
+        "2025-10-08",
+        "2025-10-09",
+        "2025-10-10",
+        "2025-10-11",
+        "2025-10-12",
+        "2025-10-13",
+        "2025-10-14",
+        "2025-10-15",
+        "2025-10-16",
+        "2025-10-17",
+        "2025-10-18",
+        "2025-10-19",
+        "2025-10-20",
+        "2025-10-21",
+        "2025-10-22"
+      ],
+      "fitness": [
+        56.0,
+        124.68241445252562,
+        184.7488475363317,
+        257.40201876085996,
+        300.3457834071093,
+        377.2791537024293,
+        368.40241155454214,
+        423.7345241774176,
+        493.76476551630867,
+        554.1473133931593,
+        629.1091617628275,
+        670.3072842749272,
+        750.5360844512227,
+        732.877236277456,
+        783.6338710168819,
+        850.1962877496811,
+        906.692603084407,
+        978.8596554089438,
+        1015.3287387130051,
+        1093.439765997583,
+        1067.712972556294,
+        1082.5914871725245,
+        1107.1199354347152,
+        1126.0712706802592,
+        1154.5767129717874,
+        1162.4114702849643,
+        1195.0618889730727,
+        1166.9440983793525,
+        1179.4878719733672,
+        1201.736511731699
+      ],
+      "fatigue": [
+        56.0,
+        118.54516238601016,
+        165.76418139472872,
+        220.69730542127058,
+        240.31761660411541,
+        292.3260307547449,
+        253.41097558298029,
+        283.6763742870186,
+        325.91277955067704,
+        354.5265858386349,
+        395.33126213739826,
+        398.7039342272563,
+        441.62762912505855,
+        382.8372316075829,
+        399.8731352821553,
+        431.641183679915,
+        450.68020275412715,
+        484.18470762248376,
+        479.22902243493445,
+        517.4330484677287,
+        448.5512743170385,
+        428.83918661022193,
+        421.75121341924546,
+        410.6068061059661,
+        410.94596570026994,
+        391.2399756570602,
+        399.1572883959046,
+        346.0206318346193,
+        339.9576385950255,
+        344.70176374928707
+      ],
+      "form": [
+        0.0,
+        6.137252066515458,
+        18.984666141602986,
+        36.704713339589375,
+        60.028166802993894,
+        84.95312294768439,
+        114.99143597156186,
+        140.05814989039902,
+        167.85198596563163,
+        199.62072755452436,
+        233.77789962542926,
+        271.60335004767086,
+        308.90845532616413,
+        350.04000466987304,
+        383.7607357347266,
+        418.5551040697661,
+        456.01240033027983,
+        494.67494778646005,
+        536.0997162780707,
+        576.0067175298543,
+        619.1616982392555,
+        653.7523005623025,
+        685.3687220154698,
+        715.4644645742931,
+        743.6307472715175,
+        771.171494627904,
+        795.9046005771681,
+        820.9234665447332,
+        839.5302333783417,
+        857.034747982412
+      ]
+    },
+    "recovery_status": {
+      "dates": [
+        "2025-09-23",
+        "2025-09-24",
+        "2025-09-25",
+        "2025-09-26",
+        "2025-09-27",
+        "2025-09-28",
+        "2025-09-29",
+        "2025-09-30",
+        "2025-10-01",
+        "2025-10-02",
+        "2025-10-03",
+        "2025-10-04",
+        "2025-10-05",
+        "2025-10-06",
+        "2025-10-07",
+        "2025-10-08",
+        "2025-10-09",
+        "2025-10-10",
+        "2025-10-11",
+        "2025-10-12",
+        "2025-10-13",
+        "2025-10-14",
+        "2025-10-15",
+        "2025-10-16",
+        "2025-10-17",
+        "2025-10-18",
+        "2025-10-19",
+        "2025-10-20",
+        "2025-10-21",
+        "2025-10-22"
+      ],
+      "overall": [
+        0.0,
+        2615.1180251201104,
+        2092.094420096089,
+        2324.5493556623205,
+        1901.9040182691715,
+        2988.7063144229837,
+        1743.4120167467406,
+        0.0,
+        2288.228271980097,
+        1830.5826175840775,
+        2033.9806862045307,
+        1664.1660159855248,
+        2615.1180251201104,
+        1525.485514653398,
+        0.0,
+        2153.626608922444,
+        1722.9012871379553,
+        1914.334763486617,
+        1566.2738973981411,
+        2461.2875530542224,
+        1464.466094067262,
+        0.0,
+        3661.165235168155,
+        2928.932188134524,
+        3254.369097927249,
+        2662.66562557684,
+        4184.188840192178,
+        2440.776823445437,
+        0.0,
+        3661.165235168155
+      ],
+      "metabolic": [
+        0.0,
+        66.96428571428571,
+        53.57142857142858,
+        59.523809523809526,
+        48.7012987012987,
+        76.53061224489797,
+        44.642857142857146,
+        0.0,
+        58.59375,
+        46.875,
+        52.083333333333336,
+        42.61363636363637,
+        66.96428571428571,
+        39.0625,
+        0.0,
+        55.147058823529406,
+        44.11764705882353,
+        49.01960784313725,
+        40.10695187165775,
+        63.02521008403362,
+        37.5,
+        0.0,
+        93.75,
+        75.0,
+        83.33333333333333,
+        68.18181818181817,
+        100.0,
+        62.5,
+        0.0,
+        93.75
+      ],
+      "neural": [
+        0.0,
+        89.28571428571428,
+        71.42857142857143,
+        79.36507936507937,
+        64.93506493506493,
+        100.0,
+        59.523809523809526,
+        0.0,
+        78.125,
+        62.5,
+        69.44444444444444,
+        56.81818181818182,
+        89.28571428571428,
+        52.083333333333336,
+        0.0,
+        73.52941176470588,
+        58.82352941176471,
+        65.359477124183,
+        53.475935828877,
+        84.03361344537815,
+        50.0,
+        0.0,
+        100.0,
+        100.0,
+        100.0,
+        90.9090909090909,
+        100.0,
+        83.33333333333334,
+        0.0,
+        100.0
+      ],
+      "structural": [
+        0.0,
+        26.151180251201104,
+        20.92094420096089,
+        23.245493556623206,
+        19.019040182691715,
+        29.88706314422984,
+        17.434120167467405,
+        0.0,
+        22.88228271980097,
+        18.305826175840775,
+        20.339806862045307,
+        16.64166015985525,
+        26.151180251201104,
+        15.25485514653398,
+        0.0,
+        21.53626608922444,
+        17.229012871379553,
+        19.14334763486617,
+        15.66273897398141,
+        24.612875530542222,
+        14.64466094067262,
+        0.0,
+        36.61165235168155,
+        29.28932188134524,
+        32.54369097927249,
+        26.6266562557684,
+        41.84188840192178,
+        24.40776823445437,
+        0.0,
+        36.61165235168155
+      ]
+    }
+  },
+  "summary": {
+    "total_load": 903.45,
+    "total_duration_hours": 12.733333333333333,
+    "average_daily_load": 30.115000000000002,
+    "average_daily_duration": 25.466666666666665,
+    "workout_distribution": {
+      "tempo": 1,
+      "threshold": 1,
+      "recovery": 28
+    },
+    "fitness_gain": 1145.736511731699,
+    "final_form": 857.034747982412,
+    "peak_fatigue": 517.4330484677287,
+    "overtraining_days": "28",
+    "key_workouts_count": 1,
+    "rest_days": 0,
+    "recovery_days": 28,
+    "hard_days": 8,
+    "easy_days": 5
+  }
+});
+        };
+    </script>
+</body>
+</html>

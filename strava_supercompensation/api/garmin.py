@@ -215,9 +215,9 @@ class GarminClient:
         if len(days_to_process) == 0:
             print(f"All {total_days} days already have complete data. Nothing to sync.")
             return results
-        else:
-            print(f"Found {days_with_complete_data} days with complete data")
-            print(f"Will sync {len(days_to_process)} days with missing data")
+
+        # Show initial status
+        print(f"Syncing {len(days_to_process)} days of Garmin data...")
 
         # Sync day by day
         for idx, (sync_date, needs_hrv, needs_sleep, needs_wellness) in enumerate(days_to_process, 1):
@@ -231,8 +231,8 @@ class GarminClient:
                 if needs_wellness:
                     data_types_needed.append("Wellness")
 
-                # Show progress
-                print(f"[{idx}/{len(days_to_process)}] Syncing {sync_date} ({', '.join(data_types_needed)})")
+                # Show compact progress (overwrite same line)
+                print(f"\rSyncing Garmin data: {idx}/{len(days_to_process)} days completed", end='', flush=True)
 
                 # Get HRV data (skip if already exists)
                 if needs_hrv:
@@ -250,8 +250,11 @@ class GarminClient:
                         results["wellness_synced"] += 1
 
             except Exception as e:
-                print(f"Error syncing {sync_date}: {e}")
+                print(f"\nError syncing {sync_date}: {e}")
                 results["errors"] += 1
+
+        # Complete the progress line
+        print(f"\rSyncing Garmin data: {len(days_to_process)}/{len(days_to_process)} days completed ✓")
 
         return results
 
@@ -272,9 +275,14 @@ class GarminClient:
                 return False
 
             # Extract HRV metrics from garth record
-            hrv_score = hrv_record.weekly_avg  # Weekly average HRV
-            hrv_rmssd = hrv_record.last_night_avg  # Last night average
+            # Use nightly RMSSD as primary metric (scientifically correct)
+            hrv_rmssd = hrv_record.last_night_avg  # Last night average RMSSD
+            # Store weekly_avg separately for reference but don't use as primary score
+            weekly_avg_rmssd = hrv_record.weekly_avg  # Weekly average for context
             hrv_status = hrv_record.status.lower() if hrv_record.status else 'unknown'
+
+            # Use daily RMSSD as the primary HRV score (not weekly average)
+            hrv_score = hrv_rmssd if hrv_rmssd is not None else weekly_avg_rmssd
 
             if hrv_score is None and hrv_rmssd is None:
                 return False
@@ -291,11 +299,12 @@ class GarminClient:
                     existing.hrv_rmssd = hrv_rmssd
                     existing.hrv_status = hrv_status
                     existing.raw_data = json.dumps({
-                        'weekly_avg': hrv_record.weekly_avg,
-                        'last_night_avg': hrv_record.last_night_avg,
+                        'daily_rmssd': hrv_record.last_night_avg,  # Primary daily metric
+                        'weekly_avg_rmssd': hrv_record.weekly_avg,  # Context only
                         'last_night_5_min_high': hrv_record.last_night_5_min_high,
                         'status': hrv_record.status,
-                        'feedback_phrase': hrv_record.feedback_phrase
+                        'feedback_phrase': hrv_record.feedback_phrase,
+                        'note': 'hrv_score uses daily_rmssd for baseline analysis'
                     })
                 else:
                     hrv_db_record = HRVData(
@@ -305,11 +314,12 @@ class GarminClient:
                         hrv_rmssd=hrv_rmssd,
                         hrv_status=hrv_status,
                         raw_data=json.dumps({
-                            'weekly_avg': hrv_record.weekly_avg,
-                            'last_night_avg': hrv_record.last_night_avg,
+                            'daily_rmssd': hrv_record.last_night_avg,  # Primary daily metric
+                            'weekly_avg_rmssd': hrv_record.weekly_avg,  # Context only
                             'last_night_5_min_high': hrv_record.last_night_5_min_high,
                             'status': hrv_record.status,
-                            'feedback_phrase': hrv_record.feedback_phrase
+                            'feedback_phrase': hrv_record.feedback_phrase,
+                            'note': 'hrv_score uses daily_rmssd for baseline analysis'
                         })
                     )
                     session.add(hrv_db_record)

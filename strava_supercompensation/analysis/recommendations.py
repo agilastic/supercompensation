@@ -2,7 +2,7 @@
 
 from enum import Enum
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Optional, Tuple, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from ..config import config
 from ..db import get_db
@@ -977,11 +977,12 @@ class RecommendationEngine:
 
         # Generate training plan
         for day in range(days):
-            # Apply daily decay first (except for day 0)
+            # Apply daily decay first (except for day 0) using proper Banister exponential decay
             if day > 0:
-                # Use actual decay rates from config (exponential decay)
-                fitness *= (1 - 1/config.FITNESS_DECAY_RATE)  # Based on 42-day half-life
-                fatigue *= (1 - 1/config.FATIGUE_DECAY_RATE)  # Based on 7-day half-life
+                # Proper exponential decay: new_value = old_value * exp(-1/time_constant)
+                import math
+                fitness *= math.exp(-1 / config.FITNESS_DECAY_RATE)
+                fatigue *= math.exp(-1 / config.FATIGUE_DECAY_RATE)
 
             form = fitness - fatigue
 
@@ -1010,7 +1011,13 @@ class RecommendationEngine:
                     # Fallback to old method if no state available
                     rec_type, load = self._get_periodized_recommendation(day, form, fatigue, fitness)
 
-            # Store current form and fitness for display
+            # Apply training load for this day using proper Banister model
+            if load > 0:
+                fitness += load * config.FITNESS_MAGNITUDE
+                fatigue += load * config.FATIGUE_MAGNITUDE
+                form = fitness - fatigue
+
+            # Store updated form and fitness for display (after adding training load)
             current_form = form
             current_fitness = fitness
 
@@ -1099,9 +1106,9 @@ class RecommendationEngine:
 
             recommendations.append(plan_entry)
 
-            # Apply training load for next day's calculation
-            fitness += load * config.FITNESS_MAGNITUDE / config.FITNESS_DECAY_RATE
-            fatigue += load * config.FATIGUE_MAGNITUDE / config.FATIGUE_DECAY_RATE
+            # Note: Training load is already applied above using proper Banister model
+            # fitness += load * config.FITNESS_MAGNITUDE (applied above)
+            # fatigue += load * config.FATIGUE_MAGNITUDE (applied above)
 
         return recommendations
 
@@ -1203,21 +1210,21 @@ class RecommendationEngine:
             # Tuesday/Thursday = Hard days (Olympic intensity)
             if day_of_week in [2, 4]:
                 if form > 25:
-                    return TrainingRecommendation.PEAK.value, int(200 * week_mult)
+                    return TrainingRecommendation.PEAK.value, int(120 * week_mult)
                 else:
-                    return TrainingRecommendation.HARD.value, int(180 * week_mult)
+                    return TrainingRecommendation.HARD.value, int(100 * week_mult)
             # Saturday = Long moderate (Olympic endurance foundation)
             elif day_of_week == 6:
-                return TrainingRecommendation.MODERATE.value, int(180 * week_mult)
+                return TrainingRecommendation.MODERATE.value, int(90 * week_mult)
             # Sunday = Active recovery (substantial aerobic base)
             elif day_of_week == 0:
-                return TrainingRecommendation.RECOVERY.value, int(80 * week_mult)
+                return TrainingRecommendation.RECOVERY.value, int(40 * week_mult)
             # Monday/Wednesday/Friday = Aerobic base building
             else:
                 if day_of_week in [1, 5]:
-                    return TrainingRecommendation.EASY.value, int(150 * week_mult)
+                    return TrainingRecommendation.EASY.value, int(60 * week_mult)
                 else:
-                    return TrainingRecommendation.MODERATE.value, int(160 * week_mult)
+                    return TrainingRecommendation.MODERATE.value, int(80 * week_mult)
 
         # Poor form = focus on recovery
         elif form < -5:
@@ -1229,11 +1236,11 @@ class RecommendationEngine:
         # Neutral form = balanced approach (Olympic base building)
         else:
             if day_of_week in [2, 4]:  # Moderate intensity days (Olympic load)
-                return TrainingRecommendation.MODERATE.value, int(170 * week_mult)
+                return TrainingRecommendation.MODERATE.value, int(85 * week_mult)
             elif day_of_week in [0, 6]:  # Weekend substantial base
-                return TrainingRecommendation.EASY.value, int(130 * week_mult)
+                return TrainingRecommendation.EASY.value, int(65 * week_mult)
             else:
-                return TrainingRecommendation.MODERATE.value, int(150 * week_mult)
+                return TrainingRecommendation.MODERATE.value, int(75 * week_mult)
 
     def _get_sport_specific_recommendation(
         self,

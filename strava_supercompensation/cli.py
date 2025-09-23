@@ -193,7 +193,7 @@ def analyze(days):
         if history:
             table = Table(title="60-Day Comprehensive Training Log", box=box.ROUNDED)
             table.add_column("Date", style="cyan", width=6)
-            table.add_column("Activity", width=12)
+            table.add_column("Activity", width=30)
             table.add_column("Int.", style="yellow", width=4)
             table.add_column("Load", style="magenta", width=5)
             table.add_column("Fitness", style="blue", width=6)
@@ -230,12 +230,20 @@ def analyze(days):
 
                         # Determine activity and intensity
                         if activity and activity.type:
-                            # Show actual activity type with proper formatting
-                            activity_name = activity.type
-                            if activity_name == "WeightTraining":
-                                activity_name = "Weights"
-                            elif len(activity_name) > 12:
-                                activity_name = activity_name[:12]
+                            # Show activity type and name
+                            activity_type = activity.type
+                            if activity_type == "WeightTraining":
+                                activity_type = "Weights"
+
+                            # Include activity name if available
+                            if activity.name and len(activity.name) > 0:
+                                # Format: Type - Name (truncated to fit)
+                                combined_name = f"{activity_type} - {activity.name}"
+                                if len(combined_name) > 30:
+                                    combined_name = combined_name[:27] + "..."
+                                activity_display = combined_name
+                            else:
+                                activity_display = activity_type
 
                             # Intensity based on load and activity type
                             if h['load'] > 300:
@@ -249,7 +257,7 @@ def analyze(days):
                             else:
                                 intensity = "RECOVERY"
                         else:
-                            activity_name = "Rest Day" if h['load'] == 0 else "Active"
+                            activity_display = "Rest Day" if h['load'] == 0 else "Active"
                             intensity = "REST" if h['load'] == 0 else "LIGHT"
 
                         # Wellness scores with proper formatting - using hrv_rmssd and sleep_score
@@ -258,7 +266,7 @@ def analyze(days):
 
                         table.add_row(
                             date_str,
-                            activity_name,
+                            activity_display,
                             intensity,
                             f"{h['load']:.0f}",
                             f"{h['fitness']:.1f}",
@@ -295,9 +303,9 @@ def analyze(days):
                     else:
                         intensity = "REST"
 
-                    activity_name = "Training" if h['load'] > 0 else "Rest"
+                    activity_display = "Training" if h['load'] > 0 else "Rest"
 
-                    # Try to get wellness data for this date
+                    # Try to get wellness and activity data for this date
                     hrv_rmssd = "—"
                     sleep_score = "—"
 
@@ -306,17 +314,38 @@ def analyze(days):
                             date_obj = dt.fromisoformat(h['date']).date()
                             with db.get_session() as session:
                                 from sqlalchemy import func
+                                from strava_supercompensation.db.models import Activity
+
+                                # Try to get activity info
+                                activity = session.query(Activity).filter(
+                                    func.date(Activity.start_date) == date_obj
+                                ).order_by(Activity.training_load.desc()).first()
+
+                                if activity and activity.type:
+                                    activity_type = activity.type
+                                    if activity_type == "WeightTraining":
+                                        activity_type = "Weights"
+
+                                    if activity.name and len(activity.name) > 0:
+                                        combined_name = f"{activity_type} - {activity.name}"
+                                        if len(combined_name) > 30:
+                                            combined_name = combined_name[:27] + "..."
+                                        activity_display = combined_name
+                                    else:
+                                        activity_display = activity_type
+
+                                # Get wellness data
                                 hrv = session.query(HRVData).filter(func.date(HRVData.date) == date_obj).first()
                                 sleep = session.query(SleepData).filter(func.date(SleepData.date) == date_obj).first()
 
                                 hrv_rmssd = f"{hrv.hrv_rmssd:3.0f}" if hrv and hrv.hrv_rmssd else "—"
                                 sleep_score = f"{sleep.sleep_score:3.0f}" if sleep and sleep.sleep_score else "—"
                         except:
-                            pass  # Keep default "—" values
+                            pass  # Keep default values
 
                     table.add_row(
                         date_str,
-                        activity_name,
+                        activity_display,
                         intensity,
                         f"{h['load']:.0f}",
                         f"{h['fitness']:.1f}",
@@ -1276,7 +1305,7 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
                             )
 
                     console.print(sport_table)
-                    console.print(f"\n[cyan]Total Training Volume:[/cyan] {total_hours:.1f} hours | {total_load:.0f} TSS")
+                    console.print(f"\n[cyan]Total Training Volume (30 days):[/cyan] {total_hours:.1f} hours | {total_load:.0f} TSS")
                 else:
                     console.print("[yellow]⚠️ No training data in last 30 days[/yellow]")
             else:

@@ -327,7 +327,6 @@ def analyze(days):
 
             console.print("\n", table)
 
-        console.print("[green]✅ Analysis complete![/green]")
 
     except Exception as e:
         # Try automatic re-authentication for 401 errors
@@ -1055,7 +1054,6 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
         console.print(result)
 
     # Step 1 completion footer
-    console.print("[green]✅ Step 1: Data synchronization complete[/green]")
 
     # Step 2: Basic Performance Model Analysis
     console.print("")  # Spacing
@@ -1066,7 +1064,6 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
         try:
             ctx = click.get_current_context()
             ctx.invoke(analyze)
-            console.print("[green]✅ Basic analysis complete.[/green]")
         except Exception as e:
             error_msg = f"Analysis failed: {e}"
             errors.append(error_msg)
@@ -1223,92 +1220,14 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
         else:
             console.print("[yellow]⚠️ Insufficient data for advanced analysis[/yellow]")
 
-        console.print("[green]✅ Advanced physiological analysis complete.[/green]")
 
     except Exception as e:
         console.print(f"[red]❌ Advanced analysis failed: {e}[/red]")
 
-    # Step 5: Performance Prediction
+    # Step 5: Multisport Analysis
     console.print("")  # Spacing
-    step5_header = Panel("🔮 Step 5: Performance Prediction", box=box.HEAVY, style="bold blue")
+    step5_header = Panel("🏃‍♂️🚴‍♀️🏊‍♀️ Step 5: Multi-Sport Profile", box=box.HEAVY, style="bold blue")
     console.print(step5_header)
-
-    try:
-        # Get current state for prediction baseline
-        current_state = analyzer._get_current_state()
-
-        if current_state:
-            console.print("\n[cyan]7-Day Performance Forecast:[/cyan]")
-
-            # Use integrated analyzer's FF model for consistent prediction
-            ff_model = analyzer.ff_model
-
-            # Predict with moderate load (100 TSS/day)
-            target_load = 100
-            days_ahead = 7
-            loads = [target_load] * days_ahead
-            days = np.arange(days_ahead)
-
-            fitness, fatigue, performance = ff_model.impulse_response(np.array(loads), days)
-
-            # Use current state from the same model for baseline consistency
-            baseline_fitness = current_state['fitness']
-            baseline_fatigue = current_state['fatigue']
-            fitness = fitness + baseline_fitness
-            fatigue = fatigue + baseline_fatigue
-
-            prediction_table = Table(box=box.ROUNDED)
-            prediction_table.add_column("Day", style="cyan", width=8)
-            prediction_table.add_column("Fitness", style="green", width=10)
-            prediction_table.add_column("Fatigue", style="red", width=10)
-            prediction_table.add_column("Form", style="yellow", width=10)
-            prediction_table.add_column("Recommendation", width=15)
-
-            for i in range(days_ahead):
-                form = fitness[i] - fatigue[i]
-                if form > 20:
-                    rec = "🚀 Peak Training"
-                elif form > 0:
-                    rec = "⚡ Hard Training"
-                elif form > -10:
-                    rec = "📈 Moderate"
-                else:
-                    rec = "😴 Recovery"
-
-                prediction_table.add_row(
-                    f"Day {i+1}",
-                    f"{fitness[i]:.1f}",
-                    f"{fatigue[i]:.1f}",
-                    f"{form:.1f}",
-                    rec
-                )
-
-            console.print(prediction_table)
-
-            # Show prediction summary
-            final_fitness = fitness[-1]
-            final_form = final_fitness - fatigue[-1]
-            fitness_gain = final_fitness - baseline_fitness
-
-            # Present forecast summary in a panel
-            forecast_summary = Panel(
-                f"[bold]Predicted Fitness Gain:[/bold] {fitness_gain:+.1f} points\n"
-                f"[bold]Final Form Score:[/bold] {final_form:.1f}\n"
-                f"[bold]Training Load:[/bold] {target_load} TSS/day",
-                title="🎯 7-Day Forecast Summary",
-                box=box.ROUNDED
-            )
-            console.print(forecast_summary)
-
-        console.print("[green]✅ Performance prediction complete.[/green]")
-
-    except Exception as e:
-        console.print(f"[red]❌ Performance prediction failed: {e}[/red]")
-
-    # Step 6: Multisport Analysis
-    console.print("")  # Spacing
-    step6_header = Panel("🏃‍♂️🚴‍♀️🏊‍♀️ Step 6: Multi-Sport Profile", box=box.HEAVY, style="bold blue")
-    console.print(step6_header)
 
     try:
         # Get basic activity type distribution from database
@@ -1338,7 +1257,6 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
                     total_load += load
 
                 if total_hours > 0:
-                    console.print("\n[cyan]Sport Distribution (30 days):[/cyan]")
                     sport_table = Table(box=box.ROUNDED)
                     sport_table.add_column("Sport", style="cyan", width=15)
                     sport_table.add_column("Activities", style="white", width=10)
@@ -1364,15 +1282,13 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
             else:
                 console.print("[yellow]⚠️ No activities found in last 30 days[/yellow]")
 
-        console.print("[green]✅ Multi-sport analysis complete.[/green]")
-
     except Exception as e:
         console.print(f"[red]❌ Multisport analysis failed: {e}[/red]")
 
-    # Step 7: Training Plan Generation & Recommendations
+    # Step 6: Training Plan Generation & Recommendations
     console.print("")  # Spacing
-    step7_header = Panel("🎯 Step 7: Today's Recommendation & 30-Day Plan", box=box.HEAVY, style="bold blue")
-    console.print(step7_header)
+    step6_header = Panel("🎯 Step 6: Today's Recommendation & 30-Day Plan", box=box.HEAVY, style="bold blue")
+    console.print(step6_header)
 
     try:
         # Use integrated analyzer for sophisticated recommendations
@@ -1611,7 +1527,6 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
                                 f"• Periodization: 3:1 (3 weeks build, 1 week recovery)",
                                 title="📊 Training Summary"))
 
-        console.print("[green]✅ Recommendation and plan generated.[/green]")
 
     except Exception as e:
         error_msg = f"Recommendation generation failed: {e}"
@@ -1627,10 +1542,10 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
             console.print(f"  • {error}")
         console.print(f"\n[cyan]You can run individual commands to fix specific issues[/cyan]")
     else:
-        # Step 8: Comprehensive Analysis Summary
+        # Step 7: Comprehensive Analysis Summary
         console.print("")  # Spacing
-        step8_header = Panel("🏆 Step 8: Final Analysis Dashboard", box=box.HEAVY, style="bold blue")
-        console.print(step8_header)
+        step7_header = Panel("🏆 Step 7: Final Analysis Dashboard", box=box.HEAVY, style="bold blue")
+        console.print(step7_header)
 
         try:
             # Get latest analysis for summary
@@ -1738,8 +1653,7 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
                 console.print(f"\n")
                 console.print(recommendations_panel)
 
-            # Step 8 completion footer
-            console.print(f"\n[bold green]✅ Step 8: Final Summary Dashboard - Analysis Complete[/bold green]")
+            # Step 7 completion footer
 
         except TypeError as te:
             # Specific handling for datetime arithmetic errors

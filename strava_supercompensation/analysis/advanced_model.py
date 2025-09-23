@@ -55,18 +55,23 @@ class EnhancedFitnessFatigueModel:
 
     def __init__(
         self,
-        k1: float = 0.1,   # Fitness magnitude (aligned with config.FITNESS_MAGNITUDE)
-        k2: float = 0.15,  # Fatigue magnitude (aligned with config.FATIGUE_MAGNITUDE)
-        tau1: float = 42,   # Fitness time constant (days)
-        tau2: float = 7,    # Fatigue time constant (days)
+        # --- START FIX ---
+        # The parameters are now sourced directly from the centralized config
+        # This prevents scaling errors and ensures consistency with the basic model.
+        k1: float = None,
+        k2: float = None,
+        tau1: float = None,
+        tau2: float = None,
+        # --- END FIX ---
         p_star: float = 0.2,  # Baseline performance
         user_id: str = "default"
     ):
         """Initialize the enhanced model with research-based parameters."""
-        self.k1 = k1
-        self.k2 = k2
-        self.tau1 = tau1
-        self.tau2 = tau2
+        # Use config values if not explicitly provided
+        self.k1 = k1 if k1 is not None else config.FITNESS_MAGNITUDE
+        self.k2 = k2 if k2 is not None else config.FATIGUE_MAGNITUDE
+        self.tau1 = tau1 if tau1 is not None else config.FITNESS_DECAY_RATE
+        self.tau2 = tau2 if tau2 is not None else config.FATIGUE_DECAY_RATE
         self.p_star = p_star
         self.user_id = user_id
 

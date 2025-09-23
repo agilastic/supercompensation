@@ -112,7 +112,7 @@ def sync(days):
         if recent:
             table = Table(title="Recent Activities", box=box.ROUNDED)
             table.add_column("Date", style="cyan")
-            table.add_column("Name", style="white")
+            table.add_column("Name")
             table.add_column("Type", style="yellow")
             table.add_column("Duration", style="green")
             table.add_column("Load", style="magenta")
@@ -145,7 +145,7 @@ def sync(days):
                 if recent:
                     table = Table(title="Recent Activities", box=box.ROUNDED)
                     table.add_column("Date", style="cyan")
-                    table.add_column("Name", style="white")
+                    table.add_column("Name")
                     table.add_column("Type", style="yellow")
                     table.add_column("Duration", style="green")
                     table.add_column("Load", style="magenta")
@@ -174,7 +174,6 @@ def sync(days):
 @click.option("--days", default=90, help="Number of days to analyze")
 def analyze(days):
     """Analyze training data and calculate metrics."""
-    console.print(Panel.fit(f"📊 Analyzing Training Data ({days} days)", style="bold blue"))
 
     auth_manager = AuthManager()
     if not auth_manager.is_authenticated():
@@ -189,43 +188,142 @@ def analyze(days):
 
         current_state = analyzer.get_current_state()
 
-        # Display current metrics
-        metrics_panel = Panel(
-            f"""
-[bold]Current Training Status[/bold]
-
-📅 Date: {current_state['date'].strftime('%Y-%m-%d')}
-
-[cyan]🏃 Fitness (CTL):[/cyan] {current_state['fitness']:.1f}
-[yellow]😓 Fatigue (ATL):[/yellow] {current_state['fatigue']:.1f}
-[green]📈 Form (TSB):[/green] {current_state['form']:.1f}
-
-[dim]Daily Load:[/dim] {current_state['daily_load']:.0f}
-            """,
-            title="📊 Metrics",
-            box=box.ROUNDED,
-        )
-        console.print(metrics_panel)
-
-        # Show trend
-        history = analyzer.get_metrics_history(days=14)
+        # Enhanced 60-Day Comprehensive Training Log
+        history = analyzer.get_metrics_history(days=60)
         if history:
-            table = Table(title="14-Day Trend", box=box.SIMPLE)
-            table.add_column("Date", style="cyan")
-            table.add_column("Fitness", style="blue")
-            table.add_column("Fatigue", style="yellow")
-            table.add_column("Form", style="green")
-            table.add_column("Load", style="magenta")
+            table = Table(title="60-Day Comprehensive Training Log", box=box.ROUNDED)
+            table.add_column("Date", style="cyan", width=6)
+            table.add_column("Activity", width=12)
+            table.add_column("Int.", style="yellow", width=4)
+            table.add_column("Load", style="magenta", width=5)
+            table.add_column("Fitness", style="blue", width=6)
+            table.add_column("Form", style="green", width=5)
+            table.add_column("HRV", style="red", width=4)
+            table.add_column("Sleep", style="purple", width=5)
 
-            for h in history[-14:]:  # Show last 14 days
-                date = datetime.fromisoformat(h['date']).strftime('%m/%d')
-                table.add_row(
-                    date,
-                    f"{h['fitness']:.1f}",
-                    f"{h['fatigue']:.1f}",
-                    f"{h['form']:.1f}",
-                    f"{h['load']:.0f}",
-                )
+            # Get wellness data if available
+            try:
+                from strava_supercompensation.db.database import get_db
+                from strava_supercompensation.db.models import Activity, HRVData, SleepData
+                from datetime import datetime as dt, timedelta
+                from sqlalchemy import func
+
+                db = get_db()
+                with db.get_session() as session:
+                    for h in history[-60:]:  # Show last 60 days
+                        date_obj = dt.fromisoformat(h['date']).date()
+                        date_str = date_obj.strftime('%m/%d')
+
+                        # Get primary activity for that day (highest load)
+                        activity = session.query(Activity).filter(
+                            func.date(Activity.start_date) == date_obj
+                        ).order_by(Activity.training_load.desc()).first()
+
+                        # Get wellness data
+                        hrv = session.query(HRVData).filter(
+                            func.date(HRVData.date) == date_obj
+                        ).first()
+
+                        sleep = session.query(SleepData).filter(
+                            func.date(SleepData.date) == date_obj
+                        ).first()
+
+                        # Determine activity and intensity
+                        if activity and activity.type:
+                            # Show actual activity type with proper formatting
+                            activity_name = activity.type
+                            if activity_name == "WeightTraining":
+                                activity_name = "Weights"
+                            elif len(activity_name) > 12:
+                                activity_name = activity_name[:12]
+
+                            # Intensity based on load and activity type
+                            if h['load'] > 300:
+                                intensity = "RACE"
+                            elif h['load'] > 200:
+                                intensity = "HARD"
+                            elif h['load'] > 100:
+                                intensity = "MOD"
+                            elif h['load'] > 30:
+                                intensity = "EASY"
+                            else:
+                                intensity = "RECOVERY"
+                        else:
+                            activity_name = "Rest Day" if h['load'] == 0 else "Active"
+                            intensity = "REST" if h['load'] == 0 else "LIGHT"
+
+                        # Wellness scores with proper formatting - using hrv_rmssd and sleep_score
+                        hrv_rmssd = f"{hrv.hrv_rmssd:3.0f}" if hrv and hrv.hrv_rmssd else "—"
+                        sleep_score = f"{sleep.sleep_score:3.0f}" if sleep and sleep.sleep_score else "—"
+
+                        table.add_row(
+                            date_str,
+                            activity_name,
+                            intensity,
+                            f"{h['load']:.0f}",
+                            f"{h['fitness']:.1f}",
+                            f"{h['form']:.1f}",
+                            hrv_rmssd,
+                            sleep_score,
+                        )
+
+            except Exception as e:
+                # Fallback to basic version if wellness data unavailable
+                from datetime import datetime as dt
+
+                # Try to get wellness data even in fallback mode
+                try:
+                    from strava_supercompensation.db.database import get_db
+                    from strava_supercompensation.db.models import HRVData, SleepData
+                    db = get_db()
+                    wellness_available = True
+                except:
+                    wellness_available = False
+
+                for h in history[-60:]:  # Show last 60 days
+                    date_str = dt.fromisoformat(h['date']).strftime('%m/%d')
+
+                    # Enhanced intensity classification
+                    if h['load'] > 300:
+                        intensity = "RACE"
+                    elif h['load'] > 200:
+                        intensity = "HARD"
+                    elif h['load'] > 100:
+                        intensity = "MOD"
+                    elif h['load'] > 30:
+                        intensity = "EASY"
+                    else:
+                        intensity = "REST"
+
+                    activity_name = "Training" if h['load'] > 0 else "Rest"
+
+                    # Try to get wellness data for this date
+                    hrv_rmssd = "—"
+                    sleep_score = "—"
+
+                    if wellness_available:
+                        try:
+                            date_obj = dt.fromisoformat(h['date']).date()
+                            with db.get_session() as session:
+                                from sqlalchemy import func
+                                hrv = session.query(HRVData).filter(func.date(HRVData.date) == date_obj).first()
+                                sleep = session.query(SleepData).filter(func.date(SleepData.date) == date_obj).first()
+
+                                hrv_rmssd = f"{hrv.hrv_rmssd:3.0f}" if hrv and hrv.hrv_rmssd else "—"
+                                sleep_score = f"{sleep.sleep_score:3.0f}" if sleep and sleep.sleep_score else "—"
+                        except:
+                            pass  # Keep default "—" values
+
+                    table.add_row(
+                        date_str,
+                        activity_name,
+                        intensity,
+                        f"{h['load']:.0f}",
+                        f"{h['fitness']:.1f}",
+                        f"{h['form']:.1f}",
+                        hrv_rmssd,
+                        sleep_score,
+                    )
 
             console.print("\n", table)
 
@@ -305,7 +403,7 @@ def recommend():
                 title = f"{days}-Day Training Plan"
                 table = Table(title=title, box=box.ROUNDED)
                 table.add_column("Day", style="cyan", width=3)
-                table.add_column("Date", style="white", width=8)
+                table.add_column("Date", width=8)
                 table.add_column("Week Type", style="bright_blue", width=10)
                 table.add_column("Intensity", style="yellow", width=8)
                 table.add_column("Activity", style="blue", width=24)
@@ -347,13 +445,13 @@ def recommend():
 
                         table.add_row(
                             f"[bold]W{week_num+1}[/bold]",
-                            "[dim]────────[/dim]",
+                            "[white]────────[/white]",
                             f"[{week_type_color}]{week_type}[/{week_type_color}]",
-                            "[dim]────────[/dim]",
-                            "[dim]────────────────────[/dim]",
-                            "[dim]─────────────────────────[/dim]",
-                            "[dim]────[/dim]",
-                            "[dim]──────[/dim]"
+                            "[white]────────[/white]",
+                            "[white]────────────────────[/white]",
+                            "[white]─────────────────────────[/white]",
+                            "[white]────[/white]",
+                            "[white]──────[/white]"
                         )
 
                     # Color code recommendations
@@ -416,7 +514,7 @@ def recommend():
                         f"[{week_type_color}]{week_type}[/{week_type_color}]",
                         f"[{rec_color}]{plan['recommendation']}[/{rec_color}]",
                         f"[blue]{activity}[/blue]",
-                        f"[green]{second_session}[/green]" if plan.get('second_activity') else f"[dim]{second_session}[/dim]",
+                        f"[green]{second_session}[/green]" if plan.get('second_activity') else f"[white]{second_session}[/white]",
                         f"{plan['suggested_load']:.0f}",
                         f"{plan['predicted_form']:.1f}",
                         f"{plan.get('predicted_fitness', 0):.1f}",
@@ -484,7 +582,7 @@ def status():
             # Get last sync
             last_activity = session.query(Activity).order_by(Activity.created_at.desc()).first()
             if last_activity:
-                console.print(f"\n[dim]Last sync: {last_activity.created_at.strftime('%Y-%m-%d %H:%M')}[/dim]")
+                console.print(f"\n[cyan]Last sync: {last_activity.created_at.strftime('%Y-%m-%d %H:%M')}[/cyan]")
 
     except Exception as e:
         console.print(f"[red]❌ Database error: {e}[/red]")
@@ -557,7 +655,7 @@ def multisport(days):
 
                 if cross_training:
                     activity_name = activity.get("name", "Unknown")[:30]
-                    console.print(f"\n[dim]After {activity_name}:[/dim]")
+                    console.print(f"\n[cyan]After {activity_name}:[/cyan]")
                     for rec in cross_training[:2]:
                         console.print(f"  • {rec['activity']}: {rec['benefit']} ({rec['duration']})")
 
@@ -617,9 +715,9 @@ def test():
 
         if result["status"] == "success":
             console.print("[green]✅ Connection successful![/green]")
-            console.print(f"[dim]Display Name: {result.get('display_name')}[/dim]")
-            console.print(f"[dim]User ID: {result.get('user_id')}[/dim]")
-            console.print(f"[dim]Email: {result.get('email')}[/dim]")
+            console.print(f"[cyan]Display Name: {result.get('display_name')}[/cyan]")
+            console.print(f"[cyan]User ID: {result.get('user_id')}[/cyan]")
+            console.print(f"[cyan]Email: {result.get('email')}[/cyan]")
         else:
             console.print(f"[red]❌ Connection failed: {result.get('message')}[/red]")
 
@@ -672,7 +770,7 @@ def sync(days):
         # Show summary
         total_synced = results["hrv_synced"] + results["sleep_synced"] + results["wellness_synced"]
         console.print(f"\n[green]✅ Sync complete! {total_synced} total records synced[/green]")
-        console.print(f"[dim]Date range: {results['date_range']}[/dim]")
+        console.print(f"[cyan]Date range: {results['date_range']}[/cyan]")
 
         # Show latest scores
         latest = garmin_client.get_latest_scores()
@@ -707,15 +805,15 @@ def test_mfa(code):
             console.print(f"[cyan]Using provided MFA code: {code}[/cyan]")
 
         console.print("[cyan]Testing Garmin connection...[/cyan]")
-        console.print("[dim]You will be prompted for an MFA code if needed[/dim]")
+        console.print("[cyan]You will be prompted for an MFA code if needed[/cyan]")
 
         result = garmin_client.test_connection()
 
         if result["status"] == "success":
             console.print("[green]✅ Connection successful![/green]")
-            console.print(f"[dim]Display Name: {result.get('display_name')}[/dim]")
-            console.print(f"[dim]User ID: {result.get('user_id')}[/dim]")
-            console.print(f"[dim]Email: {result.get('email')}[/dim]")
+            console.print(f"[cyan]Display Name: {result.get('display_name')}[/cyan]")
+            console.print(f"[cyan]User ID: {result.get('user_id')}[/cyan]")
+            console.print(f"[cyan]Email: {result.get('email')}[/cyan]")
         else:
             console.print(f"[red]❌ Connection failed: {result.get('message')}[/red]")
 
@@ -796,12 +894,12 @@ def login(code):
 
         if result["status"] == "success":
             console.print("[green]✅ Successfully authenticated![/green]")
-            console.print(f"[dim]User: {result.get('user', 'Unknown')}[/dim]")
-            console.print(f"[dim]Message: {result.get('message')}[/dim]")
+            console.print(f"[cyan]User: {result.get('user', 'Unknown')}[/cyan]")
+            console.print(f"[cyan]Message: {result.get('message')}[/cyan]")
         elif result["status"] == "mfa_required":
             console.print("[yellow]🔑 MFA code required[/yellow]")
             console.print("[yellow]Please run: strava-super garmin login --code YOUR_MFA_CODE[/yellow]")
-            console.print("[dim]Get the code from your Garmin Connect mobile app or email[/dim]")
+            console.print("[cyan]Get the code from your Garmin Connect mobile app or email[/cyan]")
         else:
             console.print(f"[red]❌ Authentication failed: {result.get('message')}[/red]")
 
@@ -835,7 +933,7 @@ def sync_mfa(days, code):
                 return
 
         console.print("[cyan]Syncing HRV and sleep data...[/cyan]")
-        console.print("[dim]Note: You may be prompted for an MFA code if authentication is needed[/dim]")
+        console.print("[cyan]Note: You may be prompted for an MFA code if authentication is needed[/cyan]")
 
         results = garmin_client.sync_essential_data(days)
 
@@ -862,7 +960,7 @@ def sync_mfa(days, code):
         # Show summary
         total_synced = results["hrv_synced"] + results["sleep_synced"] + results["wellness_synced"]
         console.print(f"\n[green]✅ MFA sync complete! {total_synced} total records synced[/green]")
-        console.print(f"[dim]Date range: {results['date_range']}[/dim]")
+        console.print(f"[cyan]Date range: {results['date_range']}[/cyan]")
 
         # Show latest scores
         latest = garmin_client.get_latest_scores()
@@ -895,76 +993,103 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
 
     errors = []
 
-    # Step 1: Sync Strava data
+    # Step 1: Combined Data Sync (Strava + Garmin)
+    console.print("")  # Spacing
+    # Collect sync status for summary panel
+    sync_results = []
+
+    # Sync Strava data (minimal output)
     if not skip_strava:
-        console.print("\n[bold cyan]📱 Step 1: Syncing Strava Activities[/bold cyan]")
         try:
-            # Call the main CLI sync command (not personal Garmin sync)
-            ctx = click.get_current_context()
-            # Find the main sync command in the CLI group
-            main_sync = None
-            for command_name, command in cli.commands.items():
-                if command_name == "sync":
-                    main_sync = command
-                    break
-
-            if main_sync:
-                ctx.invoke(main_sync, days=strava_days)
-            else:
-                raise Exception("Main sync command not found")
-
-            console.print("[green]✅ Strava sync completed[/green]")
+            with console.status("[cyan]Syncing Strava activities...[/cyan]"):
+                ctx = click.get_current_context()
+                main_sync = None
+                for command_name, command in cli.commands.items():
+                    if command_name == "sync":
+                        main_sync = command
+                        break
+                if main_sync:
+                    # Suppress the verbose output from sync
+                    import io
+                    import contextlib
+                    f = io.StringIO()
+                    with contextlib.redirect_stdout(f):
+                        ctx.invoke(main_sync, days=strava_days)
+                else:
+                    raise Exception("Main sync command not found")
+            sync_results.append("🏃‍♂️ [green]Strava Activities: ✅ Synced[/green]")
         except Exception as e:
             error_msg = f"Strava sync failed: {e}"
             errors.append(error_msg)
-            console.print(f"[red]❌ {error_msg}[/red]")
+            sync_results.append(f"🏃‍♂️ [red]Strava Activities: ❌ {error_msg}[/red]")
     else:
-        console.print("\n[dim]⏭️  Skipping Strava sync[/dim]")
+        sync_results.append("🏃‍♂️ [yellow]Strava Activities: ⏭️ Skipped[/yellow]")
 
-    # Step 2: Sync Garmin data (using personal access only)
+    # Sync Garmin data (minimal output)
     if not skip_garmin:
-        console.print(f"\n[bold cyan]⌚ Step 2: Syncing Garmin Wellness Data ({garmin_days} days)[/bold cyan]")
         try:
-            # Use personal Garmin access instead of OAuth1
             if get_garmin_client is not None:
-                ctx = click.get_current_context()
-                ctx.invoke(garmin.commands["sync-mfa"], days=garmin_days)
-                console.print("[green]✅ Garmin wellness sync completed[/green]")
+                with console.status("[cyan]Syncing Garmin wellness data...[/cyan]"):
+                    ctx = click.get_current_context()
+                    # Suppress verbose output from Garmin sync
+                    import io
+                    import contextlib
+                    f = io.StringIO()
+                    with contextlib.redirect_stdout(f):
+                        ctx.invoke(garmin.commands["sync-mfa"], days=garmin_days)
+                sync_results.append("⌚ [green]Garmin Wellness: ✅ Synced[/green]")
             else:
-                console.print("[yellow]⚠️  Garmin client not available. Install garth for wellness data.[/yellow]")
+                sync_results.append("⌚ [yellow]Garmin Wellness: ⚠️ Unavailable[/yellow]")
         except Exception as e:
-            error_msg = f"Garmin wellness sync failed: {e}"
+            error_msg = f"Garmin sync failed: {e}"
             errors.append(error_msg)
-            console.print(f"[red]❌ {error_msg}[/red]")
+            sync_results.append(f"⌚ [red]Garmin Wellness: ❌ {error_msg}[/red]")
     else:
-        console.print("\n[dim]⏭️  Skipping Garmin sync[/dim]")
+        sync_results.append("⌚ [yellow]Garmin Wellness: ⏭️ Skipped[/yellow]")
 
-    # Step 3: Run analysis
+    # Create Step 1 header panel
+    step1_header = Panel("📱 Step 1: Syncing Strava Activities", box=box.HEAVY, style="bold blue")
+    console.print(step1_header)
+
+    # Display sync results outside the panel
+    for result in sync_results:
+        console.print(result)
+
+    # Step 1 completion footer
+    console.print("[green]✅ Step 1: Data synchronization complete[/green]")
+
+    # Step 2: Basic Performance Model Analysis
+    console.print("")  # Spacing
+    step2_header = Panel("📊 Step 2: Basic Performance Model Analysis", box=box.HEAVY, style="bold blue")
+    console.print(step2_header)
+
     if not skip_analysis:
-        console.print("\n[bold cyan]📊 Step 3: Analyzing Training Data[/bold cyan]")
         try:
             ctx = click.get_current_context()
             ctx.invoke(analyze)
-            console.print("[green]✅ Analysis completed[/green]")
+            console.print("[green]✅ Basic analysis complete.[/green]")
         except Exception as e:
             error_msg = f"Analysis failed: {e}"
             errors.append(error_msg)
             console.print(f"[red]❌ {error_msg}[/red]")
     else:
-        console.print("\n[dim]⏭️  Skipping analysis[/dim]")
+        console.print("[yellow]⏭️  Skipping analysis[/yellow]")
+        console.print("[green]✅ Basic analysis complete (skipped).[/green]")
 
-    # Step 4: Comprehensive Advanced Analysis
-    console.print(f"\n[bold cyan]🧬 Step 4: Comprehensive Advanced Analysis[/bold cyan]")
+    # Step 4: Advanced Physiological Analysis
+    console.print("")  # Spacing
+    step3_header = Panel("🧬 Step 3: Advanced Physiological Analysis", box=box.HEAVY, style="bold blue")
+    console.print(step3_header)
+
     try:
         analyzer = get_integrated_analyzer("user")
 
         # Import required components at the start
         from rich.table import Table
-        from rich import box
 
         # 4.1: Advanced Model Status Check
         console.print("\n[cyan]Advanced Model Status:[/cyan]")
-        model_status_table = Table(box=box.MINIMAL)
+        model_status_table = Table(box=box.ROUNDED)
         model_status_table.add_column("Model", style="cyan")
         model_status_table.add_column("Status", style="green")
         model_status_table.add_column("Parameters", style="white")
@@ -994,7 +1119,7 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
 
             fitness_table = Table(box=box.ROUNDED)
             fitness_table.add_column("Metric", style="cyan", width=20)
-            fitness_table.add_column("Value", style="white", width=10)
+            fitness_table.add_column("Value", width=10)
             fitness_table.add_column("Status", style="green", width=15)
             fitness_table.add_column("7-Day Trend", style="yellow", width=12)
 
@@ -1046,7 +1171,7 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
 
             # 4.3: Recovery System Analysis
             console.print(f"\n[cyan]Multi-System Recovery Analysis:[/cyan]")
-            recovery_table = Table(box=box.MINIMAL)
+            recovery_table = Table(box=box.ROUNDED)
             recovery_table.add_column("System", style="cyan")
             recovery_table.add_column("Status", style="white")
             recovery_table.add_column("Recovery %", style="green")
@@ -1079,7 +1204,7 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
             easy_days = len(recent_30d[recent_30d['load'] < avg_daily * 0.5])
             rest_days = len(recent_30d[recent_30d['load'] == 0])
 
-            load_table = Table(box=box.MINIMAL)
+            load_table = Table(box=box.ROUNDED)
             load_table.add_column("Metric", style="cyan")
             load_table.add_column("Value", style="white")
             load_table.add_column("Assessment", style="green")
@@ -1099,11 +1224,16 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
         else:
             console.print("[yellow]⚠️ Insufficient data for advanced analysis[/yellow]")
 
+        console.print("[green]✅ Advanced physiological analysis complete.[/green]")
+
     except Exception as e:
         console.print(f"[red]❌ Advanced analysis failed: {e}[/red]")
 
     # Step 5: Performance Prediction
-    console.print(f"\n[bold cyan]🔮 Step 5: Performance Prediction[/bold cyan]")
+    console.print("")  # Spacing
+    step4_header = Panel("🔮 Step 4: Performance Prediction", box=box.HEAVY, style="bold blue")
+    console.print(step4_header)
+
     try:
         # Get current state for prediction baseline
         current_state = analyzer._get_current_state()
@@ -1133,7 +1263,7 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
             prediction_table.add_column("Fitness", style="green", width=10)
             prediction_table.add_column("Fatigue", style="red", width=10)
             prediction_table.add_column("Form", style="yellow", width=10)
-            prediction_table.add_column("Recommendation", style="white", width=15)
+            prediction_table.add_column("Recommendation", width=15)
 
             for i in range(days_ahead):
                 form = fitness[i] - fatigue[i]
@@ -1161,16 +1291,26 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
             final_form = final_fitness - fatigue[-1]
             fitness_gain = final_fitness - baseline_fitness
 
-            console.print(f"\n[bold green]7-Day Forecast Summary:[/bold green]")
-            console.print(f"Predicted Fitness Gain: {fitness_gain:+.1f} points")
-            console.print(f"Final Form Score: {final_form:.1f}")
-            console.print(f"Training Load: {target_load} TSS/day")
+            # Present forecast summary in a panel
+            forecast_summary = Panel(
+                f"[bold]Predicted Fitness Gain:[/bold] {fitness_gain:+.1f} points\n"
+                f"[bold]Final Form Score:[/bold] {final_form:.1f}\n"
+                f"[bold]Training Load:[/bold] {target_load} TSS/day",
+                title="🎯 7-Day Forecast Summary",
+                box=box.ROUNDED
+            )
+            console.print(forecast_summary)
+
+        console.print("[green]✅ Performance prediction complete.[/green]")
 
     except Exception as e:
         console.print(f"[red]❌ Performance prediction failed: {e}[/red]")
 
     # Step 6: Multisport Analysis
-    console.print(f"\n[bold cyan]🏃‍♂️ Step 6: Multisport Training Analysis[/bold cyan]")
+    console.print("")  # Spacing
+    step5_header = Panel("🏃‍♂️🚴‍♀️🏊‍♀️ Step 5: Multi-Sport Profile", box=box.HEAVY, style="bold blue")
+    console.print(step5_header)
+
     try:
         # Get basic activity type distribution from database
         with analyzer.db.get_session() as session:
@@ -1200,7 +1340,7 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
 
                 if total_hours > 0:
                     console.print("\n[cyan]Sport Distribution (30 days):[/cyan]")
-                    sport_table = Table(box=box.MINIMAL)
+                    sport_table = Table(box=box.ROUNDED)
                     sport_table.add_column("Sport", style="cyan", width=15)
                     sport_table.add_column("Activities", style="white", width=10)
                     sport_table.add_column("Hours", style="green", width=8)
@@ -1225,11 +1365,16 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
             else:
                 console.print("[yellow]⚠️ No activities found in last 30 days[/yellow]")
 
+        console.print("[green]✅ Multi-sport analysis complete.[/green]")
+
     except Exception as e:
         console.print(f"[red]❌ Multisport analysis failed: {e}[/red]")
 
     # Step 7: Training Plan Generation & Recommendations
-    console.print(f"\n[bold cyan]🎯 Step 7: Advanced Training Plan & Recommendations[/bold cyan]")
+    console.print("")  # Spacing
+    step6_header = Panel("🎯 Step 6: Today's Recommendation & 30-Day Plan", box=box.HEAVY, style="bold blue")
+    console.print(step6_header)
+
     try:
         # Use integrated analyzer for sophisticated recommendations
         analyzer = get_integrated_analyzer("user")
@@ -1251,18 +1396,24 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
             }
             rec_color = rec_colors.get(recommendation.get("recommendation", ""), "white")
 
-            console.print(f"\n[{rec_color}]{recommendation.get('recommendation', 'Unknown')}[/{rec_color}]")
-            console.print(f"Activity: {recommendation.get('activity', 'N/A')}")
-            console.print(f"Rationale: {recommendation.get('rationale', 'N/A')}")
+            # Display recommendation in professional format
+            rec_content = f"[bold {rec_color}]{recommendation.get('recommendation', 'Unknown')}[/bold {rec_color}]\n\n"
+            rec_content += f"[bold]Activity:[/bold]  {recommendation.get('activity', 'N/A')}\n"
+            rec_content += f"[bold]Rationale:[/bold] {recommendation.get('rationale', 'N/A')}\n\n"
+            rec_content += f"[bold]Form:[/bold] {recommendation.get('form_score', 0):.1f}        "
+            rec_content += f"[bold]Readiness:[/bold] {recommendation.get('readiness_score', 0):.1f}%      "
+            rec_content += f"[bold]Performance Potential:[/bold] {recommendation.get('performance_potential', 0):.2f}"
 
-            # Show advanced metrics
-            console.print(f"\nAdvanced Metrics:")
-            console.print(f"  Form Score: {recommendation.get('form_score', 0):.1f}")
-            console.print(f"  Readiness: {recommendation.get('readiness_score', 0):.1f}")
-            console.print(f"  Performance Potential: {recommendation.get('performance_potential', 0):.1f}")
+            recommendation_panel = Panel(
+                rec_content,
+                title="📈 Advanced Training Recommendation",
+                box=box.ROUNDED,
+                border_style=rec_color
+            )
+            console.print(recommendation_panel)
 
         # Generate advanced training plan
-        console.print(f"\n[dim]Generating {plan_days}-day plan using advanced models...[/dim]")
+        console.print(f"\n[cyan]Generating {plan_days}-day plan using advanced models...[/cyan]")
 
         if plan_days == 30:
             # Use advanced 30-day planner
@@ -1326,13 +1477,11 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
                 training_plan = []
 
         if training_plan:
-            from rich.table import Table
-            from rich import box
 
             title = f"{plan_days}-Day Training Plan"
             table = Table(title=title, box=box.ROUNDED)
             table.add_column("Day", style="cyan", width=3)
-            table.add_column("Date", style="white", width=8)
+            table.add_column("Date", width=8)
             table.add_column("Week Type", style="bright_blue", width=10)
             table.add_column("Intensity", style="yellow", width=8)
             table.add_column("Activity", style="blue", width=24)
@@ -1375,13 +1524,13 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
 
                     table.add_row(
                         f"[bold]W{week_num+1}[/bold]",
-                        "[dim]────────[/dim]",
+                        "[white]────────[/white]",
                         f"[{week_type_color}]{week_type}[/{week_type_color}]",
-                        "[dim]────────[/dim]",
-                        "[dim]────────────────────[/dim]",
-                        "[dim]─────────────────────────[/dim]",
-                        "[dim]────[/dim]",
-                        "[dim]──────[/dim]"
+                        "[white]────────[/white]",
+                        "[white]────────────────────[/white]",
+                        "[white]─────────────────────────[/white]",
+                        "[white]────[/white]",
+                        "[white]──────[/white]"
                     )
 
                 # Color code recommendations
@@ -1444,7 +1593,7 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
                     f"[{week_type_color}]{week_type}[/{week_type_color}]",
                     f"[{rec_color}]{plan['recommendation']}[/{rec_color}]",
                     f"[blue]{activity}[/blue]",
-                    f"[green]{second_session}[/green]" if plan.get('second_activity') else f"[dim]{second_session}[/dim]",
+                    f"[green]{second_session}[/green]" if plan.get('second_activity') else f"[white]{second_session}[/white]",
                     f"{plan['suggested_load']:.0f}",
                     f"{plan['predicted_form']:.1f}",
                     f"{plan.get('predicted_fitness', 0):.1f}",
@@ -1463,9 +1612,9 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
                                 f"• Rest Days: {rest_days}\n"
                                 f"• Hard/Peak Days: {hard_days}\n"
                                 f"• Periodization: 3:1 (3 weeks build, 1 week recovery)",
-                                title="📊 Training Summary", style="bold green"))
+                                title="📊 Training Summary"))
 
-        console.print("[green]✅ Training plan generated[/green]")
+        console.print("[green]✅ Recommendation and plan generated.[/green]")
 
     except Exception as e:
         error_msg = f"Recommendation generation failed: {e}"
@@ -1479,16 +1628,14 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
         console.print(f"\n[yellow]⚠️  {len(errors)} errors occurred:[/yellow]")
         for error in errors:
             console.print(f"  • {error}")
-        console.print(f"\n[dim]You can run individual commands to fix specific issues[/dim]")
+        console.print(f"\n[cyan]You can run individual commands to fix specific issues[/cyan]")
     else:
         # Step 8: Comprehensive Analysis Summary
-        console.print(f"\n[bold cyan]📊 Step 8: Comprehensive Analysis Summary[/bold cyan]")
-        try:
-            # Create final dashboard
-            console.print("\n" + "="*80)
-            console.print("[bold green]🏆 COMPREHENSIVE TRAINING ANALYSIS COMPLETE[/bold green]")
-            console.print("="*80)
+        console.print("")  # Spacing
+        step8_header = Panel("🏆 Step 8: Final Analysis Dashboard", box=box.HEAVY, style="bold blue")
+        console.print(step8_header)
 
+        try:
             # Get latest analysis for summary
             analyzer = get_integrated_analyzer("user")
             analysis = analyzer.analyze_with_advanced_models(days_back=90)
@@ -1498,99 +1645,85 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
                 latest = combined.iloc[-1]
                 recent_30d = combined.tail(30)
 
-                # Create summary dashboard
-                summary_table = Table(box=box.DOUBLE_EDGE)
+                # Create four-row summary table as specified
+                summary_table = Table(box=box.ROUNDED)
                 summary_table.add_column("Category", style="bold cyan", width=20)
-                summary_table.add_column("Key Metrics", style="white", width=40)
-                summary_table.add_column("Status", style="bold green", width=15)
+                summary_table.add_column("Key Metrics", width=50)
 
-                # Current state
-                fitness_status = "🏃‍♂️ Elite" if latest['ff_fitness'] > 100 else "📈 Building"
-                form_status = "🚀 Peaked" if latest['ff_form'] > 20 else "⚡ Ready"
-                readiness_status = "🟢 High" if latest['composite_readiness'] > 70 else "🟡 Moderate"
-
+                # Row 1: Current Fitness - Key CTL/TSB/Readiness values
                 summary_table.add_row(
                     "Current Fitness",
-                    f"Fitness: {latest['ff_fitness']:.0f} | Form: {latest['ff_form']:.0f} | Readiness: {latest['composite_readiness']:.0f}%",
-                    fitness_status
+                    f"CTL: {latest['ff_fitness']:.0f} | TSB: {latest['ff_form']:.1f} | Readiness: {latest['composite_readiness']:.0f}%"
                 )
 
-                # Training load
-                total_load_30d = recent_30d['load'].sum()
+                # Row 2: Training Load - 30-day total and daily average
+                total_load = recent_30d['load'].sum()
                 avg_load = recent_30d['load'].mean()
-                load_status = "📊 Optimal" if 50 <= avg_load <= 150 else "⚠️ Review"
-
                 summary_table.add_row(
                     "Training Load",
-                    f"30-day Total: {total_load_30d:.0f} TSS | Daily Avg: {avg_load:.0f} TSS",
-                    load_status
+                    f"30-day Total: {total_load:.0f} TSS | Daily Average: {avg_load:.0f} TSS"
                 )
 
-                # Recovery status
-                recovery_status = "✅ Excellent" if latest['overall_recovery'] > 80 else "🟡 Monitor"
-                overtraining_status = "⚠️ RISK" if latest['overtraining_risk'] else "✅ SAFE"
-
+                # Row 3: Recovery & Risk - Overall recovery % and Overtraining status
+                overtraining_status = "YES" if latest['overtraining_risk'] else "NO"
+                recovery_color = "red" if latest['overtraining_risk'] else "green"
                 summary_table.add_row(
                     "Recovery & Risk",
-                    f"Recovery: {min(100, latest['overall_recovery']):.0f}% | Overtraining: {'YES' if latest['overtraining_risk'] else 'NO'}",
-                    overtraining_status
+                    f"Overall Recovery: {latest['overall_recovery']:.0f}% | Overtraining Risk: [{recovery_color}]{overtraining_status}[/{recovery_color}]"
                 )
 
-                # Performance trend
+                # Row 4: 7-Day Trend - Key performance vectors
                 recent_7d = combined.tail(7)
-                fitness_trend = recent_7d['ff_fitness'].iloc[-1] - recent_7d['ff_fitness'].iloc[0]
-                trend_status = "📈 Improving" if fitness_trend > 0 else "📉 Declining"
-
+                fitness_change = recent_7d['ff_fitness'].iloc[-1] - recent_7d['ff_fitness'].iloc[0]
+                fitness_trend = "↗️" if fitness_change > 0 else "↘️"
+                form_trend = "↗️" if len(combined) > 7 and combined['ff_form'].iloc[-1] > combined['ff_form'].iloc[-7] else "↘️"
                 summary_table.add_row(
                     "7-Day Trend",
-                    f"Fitness Change: {fitness_trend:+.1f} | Load Avg: {recent_7d['load'].mean():.0f} TSS",
-                    trend_status
+                    f"Fitness: {fitness_change:+.1f} {fitness_trend} | Form: {form_trend} | Load Avg: {recent_7d['load'].mean():.0f} TSS"
                 )
 
                 console.print(summary_table)
 
-                # Key recommendations panel
-                console.print(f"\n[bold yellow]🎯 KEY RECOMMENDATIONS[/bold yellow]")
+                # Key Recommendations - Professional Panel
+                recommendations = []
 
-                recommendation_panel = []
-
+                # Priority 1: Safety and overtraining check
                 if latest['overtraining_risk']:
-                    recommendation_panel.append("🚨 [red]IMMEDIATE REST REQUIRED[/red] - Overtraining detected")
-                elif latest['composite_readiness'] > 80:
-                    recommendation_panel.append("🚀 [green]PEAK TRAINING WINDOW[/green] - Ready for high intensity")
+                    recommendations.append("🚨 [red]IMMEDIATE REST REQUIRED[/red] - Overtraining detected")
+                    recommendations.append("😴 [yellow]ACTIVE RECOVERY ONLY[/yellow] - Light movement, focus on sleep")
+                elif latest['composite_readiness'] > 80 and latest['ff_form'] > 20:
+                    recommendations.append("🎯 [green]COMPETITION READY[/green] - Peak form achieved")
+                    recommendations.append("🚀 [green]PEAK TRAINING WINDOW[/green] - Ready for high intensity")
                 elif latest['composite_readiness'] < 40:
-                    recommendation_panel.append("😴 [yellow]RECOVERY FOCUS[/yellow] - Prioritize easy training")
+                    recommendations.append("😴 [yellow]RECOVERY FOCUS[/yellow] - Prioritize easy training and sleep")
+                    recommendations.append("📉 [cyan]REDUCE LOAD[/cyan] - Allow fitness to consolidate")
                 else:
-                    recommendation_panel.append("📈 [cyan]PROGRESSIVE TRAINING[/cyan] - Balanced load progression")
+                    recommendations.append("📈 [cyan]PROGRESSIVE TRAINING[/cyan] - Balanced load progression")
+                    if latest['ff_form'] < -10:
+                        recommendations.append("⚡ [yellow]BUILD PHASE[/yellow] - Focus on base fitness development")
+                    elif avg_load < 60:
+                        recommendations.append("📊 [cyan]INCREASE VOLUME[/cyan] - Room for progressive load increase")
 
-                if latest['ff_form'] > 20:
-                    recommendation_panel.append("🎯 [green]COMPETITION READY[/green] - Peak form achieved")
-                elif latest['ff_form'] < -10:
-                    recommendation_panel.append("⚡ [yellow]BUILD PHASE[/yellow] - Focus on base fitness")
+                # Format as bulleted list in a professional panel
+                rec_content = "\n".join([f"• {rec}" for rec in recommendations[:3]])  # Limit to top 3 as specified
 
-                if avg_load > 120:
-                    recommendation_panel.append("📊 [yellow]HIGH VOLUME[/yellow] - Monitor fatigue closely")
-                elif avg_load < 60:
-                    recommendation_panel.append("📈 [cyan]PROGRESSIVE LOAD[/cyan] - Room for increase")
+                recommendations_panel = Panel(
+                    rec_content,
+                    title="🎯 Key Recommendations",
+                    box=box.ROUNDED,
+                    border_style="yellow"
+                )
+                console.print(f"\n")
+                console.print(recommendations_panel)
 
-                # Prioritize overtraining warning and remove contradictory advice
-                if any("🚨" in rec and "IMMEDIATE REST REQUIRED" in rec for rec in recommendation_panel):
-                    # Filter out contradictory advice like "COMPETITION READY"
-                    recommendation_panel = [
-                        rec for rec in recommendation_panel
-                        if not ("COMPETITION READY" in rec or "PEAK TRAINING WINDOW" in rec)
-                    ]
-
-                for rec in recommendation_panel:
-                    console.print(f"  • {rec}")
-
-            console.print(f"\n[bold green]✅ Complete Analysis Finished - {len([s for s in ['Data Sync', 'Basic Analysis', 'Advanced Models', 'Fitness State', 'Performance Prediction', 'Multisport', 'Training Plan'] if True])} modules analyzed[/bold green]")
+            # Step 8 completion footer
+            console.print(f"\n[bold green]✅ Step 8: Final Summary Dashboard - Analysis Complete[/bold green]")
 
         except Exception as e:
             console.print(f"[red]❌ Summary generation failed: {e}[/red]")
             console.print(f"[green]✅ All steps completed successfully![/green]")
 
-        console.print(f"\n[dim]🧬 Advanced models active • 📊 Multi-system analysis • 🎯 Optimal recommendations ready[/dim]")
+        console.print(f"\n[cyan]🧬 Advanced models active • 📊 Multi-system analysis • 🎯 Optimal recommendations ready[/cyan]")
 
 
 @cli.command()
@@ -1807,7 +1940,7 @@ def model_status(verbose):
             except Exception as e:
                 console.print(f"[yellow]⚠️  Could not load model parameters: {e}[/yellow]")
 
-        console.print("\n[dim]All models operational and ready for advanced training analysis.[/dim]")
+        console.print("\n[cyan]All models operational and ready for advanced training analysis.[/cyan]")
 
     except Exception as e:
         console.print(f"[red]❌ Model status check failed: {e}[/red]")
@@ -1948,7 +2081,7 @@ def predict(days_ahead, target_load, show_optimal):
         table.add_column("Fitness", style="green")
         table.add_column("Fatigue", style="red")
         table.add_column("Form", style="yellow")
-        table.add_column("Status", style="white")
+        table.add_column("Status")
 
         for i in range(min(7, days_ahead)):  # Show first 7 days
             form = fitness[i] - fatigue[i]

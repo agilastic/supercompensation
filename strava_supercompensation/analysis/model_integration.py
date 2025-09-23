@@ -180,7 +180,11 @@ class IntegratedTrainingAnalyzer:
         for i in range(1, len(results)):
             # Get recent activities
             recent_loads = training_data['load'].iloc[max(0, i-7):i+1].values
-            recent_sports = training_data['sport'].iloc[max(0, i-7):i+1].values
+            # Handle case where sport column might not exist
+            if 'sport' in training_data.columns:
+                recent_sports = training_data['sport'].iloc[max(0, i-7):i+1].values
+            else:
+                recent_sports = ['Unknown'] * len(recent_loads)
 
             # Calculate hours since last significant load
             last_load_idx = None

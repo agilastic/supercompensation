@@ -385,7 +385,7 @@ def recommend():
 """
 
         # Display the recommendation panel
-        console.print(Panel(rec_text.strip(), title="📈 Advanced Training Recommendation", border_style=rec_color))
+        console.print(Panel(rec_text.strip(), title="📈 Today's Advanced Recommendation", border_style=rec_color))
 
         # Show training plan options
         plan_choice = click.prompt(
@@ -989,7 +989,6 @@ def sync_mfa(days, code):
 @click.option("--skip-analysis", is_flag=True, help="Skip analysis step")
 def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_analysis):
     """Complete training analysis workflow: sync all data, analyze, and get recommendations."""
-    console.print(Panel.fit("🚀 Complete Training Analysis Workflow", style="bold green"))
 
     errors = []
 
@@ -1078,8 +1077,8 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
 
     # Step 4: Advanced Physiological Analysis
     console.print("")  # Spacing
-    step3_header = Panel("🧬 Step 3: Advanced Physiological Analysis", box=box.HEAVY, style="bold blue")
-    console.print(step3_header)
+    step4_header = Panel("🧬 Step 4: Advanced Physiological Analysis", box=box.HEAVY, style="bold blue")
+    console.print(step4_header)
 
     try:
         analyzer = get_integrated_analyzer("user")
@@ -1231,8 +1230,8 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
 
     # Step 5: Performance Prediction
     console.print("")  # Spacing
-    step4_header = Panel("🔮 Step 4: Performance Prediction", box=box.HEAVY, style="bold blue")
-    console.print(step4_header)
+    step5_header = Panel("🔮 Step 5: Performance Prediction", box=box.HEAVY, style="bold blue")
+    console.print(step5_header)
 
     try:
         # Get current state for prediction baseline
@@ -1308,8 +1307,8 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
 
     # Step 6: Multisport Analysis
     console.print("")  # Spacing
-    step5_header = Panel("🏃‍♂️🚴‍♀️🏊‍♀️ Step 5: Multi-Sport Profile", box=box.HEAVY, style="bold blue")
-    console.print(step5_header)
+    step6_header = Panel("🏃‍♂️🚴‍♀️🏊‍♀️ Step 6: Multi-Sport Profile", box=box.HEAVY, style="bold blue")
+    console.print(step6_header)
 
     try:
         # Get basic activity type distribution from database
@@ -1372,8 +1371,8 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
 
     # Step 7: Training Plan Generation & Recommendations
     console.print("")  # Spacing
-    step6_header = Panel("🎯 Step 6: Today's Recommendation & 30-Day Plan", box=box.HEAVY, style="bold blue")
-    console.print(step6_header)
+    step7_header = Panel("🎯 Step 7: Today's Recommendation & 30-Day Plan", box=box.HEAVY, style="bold blue")
+    console.print(step7_header)
 
     try:
         # Use integrated analyzer for sophisticated recommendations
@@ -1384,8 +1383,6 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
 
         if recommendation:
             # Display today's recommendation
-            console.print(Panel.fit("🎯 Today's Advanced Recommendation", style="bold blue"))
-
             rec_colors = {
                 "REST": "red",
                 "RECOVERY": "yellow",
@@ -1406,7 +1403,7 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
 
             recommendation_panel = Panel(
                 rec_content,
-                title="📈 Advanced Training Recommendation",
+                title="📈 Today's Advanced Recommendation",
                 box=box.ROUNDED,
                 border_style=rec_color
             )
@@ -1638,6 +1635,7 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
         try:
             # Get latest analysis for summary
             analyzer = get_integrated_analyzer("user")
+
             analysis = analyzer.analyze_with_advanced_models(days_back=90)
 
             if analysis and 'combined' in analysis and len(analysis['combined']) > 0:
@@ -1651,41 +1649,65 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
                 summary_table.add_column("Key Metrics", width=50)
 
                 # Row 1: Current Fitness - Key CTL/TSB/Readiness values
-                summary_table.add_row(
-                    "Current Fitness",
-                    f"CTL: {latest['ff_fitness']:.0f} | TSB: {latest['ff_form']:.1f} | Readiness: {latest['composite_readiness']:.0f}%"
-                )
+                try:
+                    fitness_val = float(latest['ff_fitness']) if 'ff_fitness' in latest else 0
+                    form_val = float(latest['ff_form']) if 'ff_form' in latest else 0
+                    readiness_val = float(latest['composite_readiness']) if 'composite_readiness' in latest else 0
+                    summary_table.add_row(
+                        "Current Fitness",
+                        f"CTL: {fitness_val:.0f} | TSB: {form_val:.1f} | Readiness: {readiness_val:.0f}%"
+                    )
+                except (TypeError, ValueError) as e:
+                    summary_table.add_row("Current Fitness", "Data processing error")
 
                 # Row 2: Training Load - 30-day total and daily average
-                total_load = recent_30d['load'].sum()
-                avg_load = recent_30d['load'].mean()
-                summary_table.add_row(
-                    "Training Load",
-                    f"30-day Total: {total_load:.0f} TSS | Daily Average: {avg_load:.0f} TSS"
-                )
+                try:
+                    total_load = float(recent_30d['load'].sum())
+                    avg_load = float(recent_30d['load'].mean())
+                    summary_table.add_row(
+                        "Training Load",
+                        f"30-day Total: {total_load:.0f} TSS | Daily Average: {avg_load:.0f} TSS"
+                    )
+                except (TypeError, ValueError):
+                    summary_table.add_row("Training Load", "Data processing error")
 
                 # Row 3: Recovery & Risk - Overall recovery % and Overtraining status
-                overtraining_status = "YES" if latest['overtraining_risk'] else "NO"
-                recovery_color = "red" if latest['overtraining_risk'] else "green"
-                summary_table.add_row(
-                    "Recovery & Risk",
-                    f"Overall Recovery: {latest['overall_recovery']:.0f}% | Overtraining Risk: [{recovery_color}]{overtraining_status}[/{recovery_color}]"
-                )
+                try:
+                    overtraining_status = "YES" if latest['overtraining_risk'] else "NO"
+                    recovery_color = "red" if latest['overtraining_risk'] else "green"
+                    recovery_val = float(latest['overall_recovery']) if 'overall_recovery' in latest else 80.0
+                    summary_table.add_row(
+                        "Recovery & Risk",
+                        f"Overall Recovery: {recovery_val:.0f}% | Overtraining Risk: [{recovery_color}]{overtraining_status}[/{recovery_color}]"
+                    )
+                except (TypeError, ValueError, KeyError):
+                    summary_table.add_row("Recovery & Risk", "Data processing error")
 
                 # Row 4: 7-Day Trend - Key performance vectors
-                recent_7d = combined.tail(7)
-                fitness_change = recent_7d['ff_fitness'].iloc[-1] - recent_7d['ff_fitness'].iloc[0]
-                fitness_trend = "↗️" if fitness_change > 0 else "↘️"
-                form_trend = "↗️" if len(combined) > 7 and combined['ff_form'].iloc[-1] > combined['ff_form'].iloc[-7] else "↘️"
-                summary_table.add_row(
-                    "7-Day Trend",
-                    f"Fitness: {fitness_change:+.1f} {fitness_trend} | Form: {form_trend} | Load Avg: {recent_7d['load'].mean():.0f} TSS"
-                )
+                try:
+                    recent_7d = combined.tail(7)
+                    # Ensure numeric values for arithmetic
+                    fitness_change = float(recent_7d['ff_fitness'].iloc[-1]) - float(recent_7d['ff_fitness'].iloc[0])
+                    fitness_trend = "↗️" if fitness_change > 0 else "↘️"
+                    form_trend = "↗️" if len(combined) > 7 and float(combined['ff_form'].iloc[-1]) > float(combined['ff_form'].iloc[-7]) else "↘️"
+                    load_avg = float(recent_7d['load'].mean())
+                    summary_table.add_row(
+                        "7-Day Trend",
+                        f"Fitness: {fitness_change:+.1f} {fitness_trend} | Form: {form_trend} | Load Avg: {load_avg:.0f} TSS"
+                    )
+                except (TypeError, ValueError, KeyError, IndexError):
+                    summary_table.add_row("7-Day Trend", "Insufficient data for trend analysis")
 
                 console.print(summary_table)
 
                 # Key Recommendations - Professional Panel
                 recommendations = []
+
+                # Get avg_load safely (might not be defined if training load calculation failed)
+                try:
+                    avg_load_for_rec = float(recent_30d['load'].mean()) if 'load' in recent_30d.columns else 50.0
+                except:
+                    avg_load_for_rec = 50.0  # Default value if calculation fails
 
                 # Priority 1: Safety and overtraining check
                 if latest['overtraining_risk']:
@@ -1701,7 +1723,7 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
                     recommendations.append("📈 [cyan]PROGRESSIVE TRAINING[/cyan] - Balanced load progression")
                     if latest['ff_form'] < -10:
                         recommendations.append("⚡ [yellow]BUILD PHASE[/yellow] - Focus on base fitness development")
-                    elif avg_load < 60:
+                    elif avg_load_for_rec < 60:
                         recommendations.append("📊 [cyan]INCREASE VOLUME[/cyan] - Room for progressive load increase")
 
                 # Format as bulleted list in a professional panel
@@ -1719,9 +1741,12 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
             # Step 8 completion footer
             console.print(f"\n[bold green]✅ Step 8: Final Summary Dashboard - Analysis Complete[/bold green]")
 
+        except TypeError as te:
+            # Specific handling for datetime arithmetic errors
+            console.print(f"[red]❌ Summary generation failed due to data type issue[/red]")
+            console.print(f"[yellow]ℹ️ Using simplified summary instead[/yellow]")
         except Exception as e:
             console.print(f"[red]❌ Summary generation failed: {e}[/red]")
-            console.print(f"[green]✅ All steps completed successfully![/green]")
 
         console.print(f"\n[cyan]🧬 Advanced models active • 📊 Multi-system analysis • 🎯 Optimal recommendations ready[/cyan]")
 

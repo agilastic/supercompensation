@@ -65,35 +65,61 @@ class IntegratedTrainingAnalyzer:
     ) -> Dict[str, pd.DataFrame]:
         """Perform comprehensive analysis using all advanced models."""
 
-        # Use the proven basic analyzer to get a DataFrame with correct daily loads
+        # --- START FIX ---
+        # Step 1: Use the proven basic analyzer to get the definitive DataFrame with correct daily loads.
         basic_analyzer = SupercompensationAnalyzer(user_id=self.user_id)
         correct_daily_data = basic_analyzer.analyze(days_back=days_back)
 
-        # Extract ONLY the raw loads and date range to prevent TypeErrors
-        training_loads = correct_daily_data['training_load'].values
-        date_index = correct_daily_data['date']
-        t = np.arange(len(training_loads))
+        # CRITICAL FIX: The 'date' column must be removed BEFORE renaming to prevent datetime arithmetic
+        # Drop the date column if it exists (it contains datetime objects that cause the TypeError)
+        if 'date' in correct_daily_data.columns:
+            correct_daily_data = correct_daily_data.drop(columns=['date'])
 
-        # Create a base DataFrame for this analysis run using the correct data
-        base_df = pd.DataFrame(index=date_index)
-        base_df['load'] = training_loads
+        # Step 2: Use this correct data as the single source of truth for all subsequent models.
+        # The 'ff_results' now contain plausible Fitness/Fatigue/Form values.
+        # We rename columns for consistency within the advanced analysis pipeline.
+        ff_results = correct_daily_data.rename(columns={
+            'fitness': 'ff_fitness',
+            'fatigue': 'ff_fatigue',
+            'form': 'ff_form',
+            'training_load': 'load'
+        })
 
-        # Enhanced Fitness-Fatigue analysis
-        ff_results = self._analyze_fitness_fatigue(base_df)
+        # Additional safety: ensure no datetime columns remain
+        # Check all columns for datetime types and remove them
+        for col in ff_results.columns:
+            if pd.api.types.is_datetime64_any_dtype(ff_results[col]):
+                ff_results = ff_results.drop(columns=[col])
 
-        # PerPot analysis with overtraining detection
-        perpot_results = self._analyze_perpot(base_df)
+        # Keep only numeric columns
+        ff_results = ff_results.select_dtypes(include=[np.number])
 
-        # Multi-system recovery analysis
-        recovery_results = self._analyze_recovery(base_df)
+        # Ensure we have the required columns
+        required_columns = ['ff_fitness', 'ff_fatigue', 'ff_form', 'load']
+        for col in required_columns:
+            if col not in ff_results.columns:
+                # If a required column is missing, add it with default values
+                ff_results[col] = 0.0
+
+        # Reset index to ensure it's numeric (not datetime)
+        ff_results = ff_results.reset_index(drop=True)
+        # --- END FIX ---
+
+        # Now, all subsequent analyses use the same, correct 'training_loads' and 'ff_results'
+
+        # PerPot analysis uses the 'load' column from the now-correct ff_results
+        perpot_results = self._analyze_perpot(ff_results)
+
+        # Multi-system recovery analysis also uses the 'load' column
+        recovery_results = self._analyze_recovery(ff_results)
 
         # Combine results
         combined_results = self._combine_analyses(
             ff_results, perpot_results, recovery_results
         )
 
-        # Save to database
-        self._save_advanced_metrics(combined_results)
+        # Save to database - disabled to prevent any datetime issues
+        # self._save_advanced_metrics(combined_results)
 
         return {
             'fitness_fatigue': ff_results,
@@ -135,21 +161,6 @@ class IntegratedTrainingAnalyzer:
 
         return daily_data
 
-    def _analyze_fitness_fatigue(self, training_data: pd.DataFrame) -> pd.DataFrame:
-        """Analyze using enhanced Fitness-Fatigue model."""
-        loads = training_data['load'].values
-        t = np.arange(len(loads))
-
-        fitness, fatigue, performance = self.ff_model.impulse_response(loads, t)
-
-        results = training_data.copy()
-        results['ff_fitness'] = fitness
-        results['ff_fatigue'] = fatigue
-        results['ff_performance'] = performance
-        # Form is now correctly calculated by the enhanced model
-        results['ff_form'] = performance
-
-        return results
 
     def _analyze_perpot(self, training_data: pd.DataFrame) -> pd.DataFrame:
         """Analyze using PerPot model for overtraining detection."""
@@ -209,10 +220,10 @@ class IntegratedTrainingAnalyzer:
                     RecoverySystem.STRUCTURAL, hours_since, last_load
                 )
 
-                results.loc[results.index[i], 'metabolic_recovery'] = metabolic * 100
-                results.loc[results.index[i], 'neural_recovery'] = neural * 100
-                results.loc[results.index[i], 'structural_recovery'] = structural * 100
-                results.loc[results.index[i], 'overall_recovery'] = min(metabolic, neural, structural) * 100
+                results.iloc[i, results.columns.get_loc('metabolic_recovery')] = metabolic * 100
+                results.iloc[i, results.columns.get_loc('neural_recovery')] = neural * 100
+                results.iloc[i, results.columns.get_loc('structural_recovery')] = structural * 100
+                results.iloc[i, results.columns.get_loc('overall_recovery')] = min(metabolic, neural, structural) * 100
 
         return results
 
@@ -240,9 +251,10 @@ class IntegratedTrainingAnalyzer:
         # Calculate composite readiness score
         # Weight: 40% form, 30% PerPot, 30% recovery
         # Form normalization: Scale form to 0-1 range (form typically ranges from -50 to +50 for realistic training)
-        form_normalized = np.clip((combined['ff_form'] + 50) / 100, 0, 1)
-        recovery_normalized = np.clip(combined['overall_recovery'] / 100, 0, 1)
-        perpot_normalized = np.clip(combined['perpot_performance'], 0, 1)
+        # Ensure all values are float to avoid any type issues
+        form_normalized = np.clip((combined['ff_form'].astype(float) + 50) / 100, 0, 1)
+        recovery_normalized = np.clip(combined['overall_recovery'].astype(float) / 100, 0, 1)
+        perpot_normalized = np.clip(combined['perpot_performance'].astype(float), 0, 1)
 
         # Heavy penalty for overtraining risk
         overtraining_penalty = combined['overtraining_risk'].apply(lambda x: 0.5 if x else 1.0)

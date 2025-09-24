@@ -463,3 +463,36 @@ class AdaptiveModelParameters(Base):
 
     def __repr__(self):
         return f"<AdaptiveModelParameters(user_id={self.user_id}, fitness_decay={self.fitness_decay}, fatigue_decay={self.fatigue_decay})>"
+
+
+class BodyComposition(Base):
+    """Store body composition data from RENPHO or other sources."""
+
+    __tablename__ = "body_composition"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(String(50), default="default")
+    date = Column(DateTime, nullable=False, unique=True)
+
+    # Core metrics for training analysis
+    weight_kg = Column(Float)  # Weight in kg
+    bmi = Column(Float)  # Body Mass Index
+    muscle_mass_percent = Column(Float)  # Critical for power-to-weight and strength adaptation
+    bone_mass_percent = Column(Float)  # Bone density indicator
+    body_fat_percent = Column(Float)  # Key metric for endurance performance
+    water_percent = Column(Float)  # Hydration and recovery indicator
+
+    # Advanced metrics for periodization
+    basal_metabolism_kcal = Column(Float)  # BMR - critical for fueling calculations
+    visceral_fat = Column(Float)  # Health and metabolic efficiency indicator
+    protein_percent = Column(Float)  # Recovery and adaptation marker
+    metabolic_age = Column(Integer)  # Overall fitness age
+    skeletal_muscle_percent = Column(Float)  # Power production capacity
+
+    # Raw data storage for future analysis
+    raw_data = Column(Text)  # Store the full JSON payload
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def __repr__(self):
+        return f"<BodyComposition(date={self.date}, weight_kg={self.weight_kg}, body_fat={self.body_fat_percent}%)>"

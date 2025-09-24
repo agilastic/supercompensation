@@ -19,6 +19,12 @@ try:
 except ImportError:
     GarminError = Exception  # Fallback
     get_garmin_client = None  # Mark as unavailable
+
+# RENPHO integration - CSV import approach
+try:
+    from .api.renpho_csv import RenphoCsvImporter
+except ImportError:
+    RenphoCsvImporter = None  # Mark as unavailable
 from .analysis import SupercompensationAnalyzer
 from .analysis.multisport_metrics import MultiSportCalculator
 from .analysis.model_integration import get_integrated_analyzer
@@ -201,12 +207,15 @@ def analyze(days):
             table.add_column("HRV", style="red", width=4)
             table.add_column("Sleep", style="purple", width=5)
             table.add_column("RHR", style="yellow", width=4)
-            table.add_column("BP", style="cyan", width=9)
+            table.add_column("Weight", style="blue", width=7)
+            table.add_column("BF%", style="bright_yellow", width=5)
+            table.add_column("H2O", style="cyan", width=5)
+            table.add_column("BP", style="red", width=9)
 
             # Get wellness data if available
             try:
                 from .db import get_db
-                from .db.models import Activity, HRVData, SleepData, BloodPressure, WellnessData
+                from .db.models import Activity, HRVData, SleepData, BloodPressure, WellnessData, BodyComposition
                 from datetime import datetime as dt, timedelta
                 from sqlalchemy import func
 
@@ -292,6 +301,17 @@ def analyze(days):
 
                         bp_str = f"{bp.systolic}/{bp.diastolic}" if bp and bp.systolic and bp.diastolic else "—"
 
+                        # Get body composition data (RENPHO)
+                        body_comp = session.query(BodyComposition).filter(
+                            BodyComposition.user_id == "default",
+                            BodyComposition.date >= date_start,
+                            BodyComposition.date < date_end
+                        ).first()
+
+                        # Format athletic body composition display
+                        weight_str = f"{body_comp.weight_kg:.1f}kg" if body_comp and body_comp.weight_kg else "—"
+                        body_fat_str = f"{body_comp.body_fat_percent:.1f}%" if body_comp and body_comp.body_fat_percent else "—"
+                        water_str = f"{body_comp.water_percent:.1f}%" if body_comp and body_comp.water_percent else "—"
 
                         table.add_row(
                             date_str,
@@ -303,6 +323,9 @@ def analyze(days):
                             hrv_rmssd,
                             sleep_score,
                             rhr,
+                            weight_str,
+                            body_fat_str,
+                            water_str,
                             bp_str,
                         )
 
@@ -313,7 +336,7 @@ def analyze(days):
                 # Try to get wellness data even in fallback mode
                 try:
                     from .db import get_db
-                    from .db.models import HRVData, SleepData
+                    from .db.models import HRVData, SleepData, BodyComposition
                     db = get_db()
                     wellness_available = True
                 except:
@@ -339,6 +362,7 @@ def analyze(days):
                     # Try to get wellness and activity data for this date
                     hrv_rmssd = "—"
                     sleep_score = "—"
+                    weight_str = "—"
 
                     if wellness_available:
                         try:
@@ -397,9 +421,22 @@ def analyze(days):
                                     rhr = "—"
 
                                 bp_str = f"{bp.systolic}/{bp.diastolic}" if bp and bp.systolic and bp.diastolic else "—"
+
+                                # Get body composition data
+                                body_comp = session.query(BodyComposition).filter(
+                                    BodyComposition.user_id == "default",
+                                    BodyComposition.date >= date_start,
+                                    BodyComposition.date < date_end
+                                ).first()
+                                weight_str = f"{body_comp.weight_kg:.1f}kg" if body_comp and body_comp.weight_kg else "—"
+                                body_fat_str = f"{body_comp.body_fat_percent:.1f}%" if body_comp and body_comp.body_fat_percent else "—"
+                                water_str = f"{body_comp.water_percent:.1f}%" if body_comp and body_comp.water_percent else "—"
                         except:
                             rhr = "—"
                             bp_str = "—"
+                            weight_str = "—"
+                            body_fat_str = "—"
+                            water_str = "—"
 
                     table.add_row(
                         date_str,
@@ -411,6 +448,9 @@ def analyze(days):
                         hrv_rmssd,
                         sleep_score,
                         rhr,
+                        weight_str,
+                        body_fat_str,
+                        water_str,
                         bp_str,
                     )
 
@@ -1160,6 +1200,212 @@ def sync_mfa(days, code):
         console.print(f"[red]❌ Error syncing data: {e}[/red]")
 
 
+# ===== RENPHO BODY COMPOSITION INTEGRATION =====
+
+@cli.group()
+def renpho():
+    """RENPHO body composition integration."""
+    pass
+
+
+@renpho.command()
+@click.option("--csv-path", help="Path to RENPHO CSV export file (auto-discovers if not provided)")
+@click.option("--user-id", default="default", help="User ID for the data")
+@click.option("--directory", default=".", help="Directory to search for RENPHO CSV files")
+def import_csv(csv_path, user_id, directory):
+    """Import body composition data from RENPHO CSV export. Auto-discovers RENPHO files if no path specified."""
+
+    if csv_path:
+        # Single file import
+        console.print(Panel.fit(f"🧬 Importing RENPHO CSV Data", style="bold purple"))
+    else:
+        # Auto-discovery mode
+        console.print(Panel.fit(f"🔍 Auto-discovering RENPHO CSV files in {directory}", style="bold purple"))
+
+    try:
+        if RenphoCsvImporter is None:
+            console.print("[red]❌ RENPHO CSV importer not available[/red]")
+            return
+
+        if csv_path:
+            # Single file import
+            importer = RenphoCsvImporter(csv_path, user_id)
+
+            with console.status("[cyan]Importing CSV data and calculating athletic metrics...[/cyan]"):
+                results = importer.import_csv_data()
+
+            # Display single file results
+            table = Table(title="RENPHO CSV Import Results", box=box.ROUNDED)
+            table.add_column("Metric", style="cyan")
+            table.add_column("Count", justify="right", style="green")
+
+            table.add_row("New measurements", str(results['new_measurements']))
+            table.add_row("Updated measurements", str(results['updated_measurements']))
+            table.add_row("Total processed", str(results['total_processed']))
+            if results['errors'] > 0:
+                table.add_row("Errors", str(results['errors']), style="red")
+
+            console.print(table)
+
+            if results['new_measurements'] > 0 or results['updated_measurements'] > 0:
+                console.print(f"\n✅ Successfully imported {results['new_measurements'] + results['updated_measurements']} measurements")
+
+                # Show athletic trends analysis
+                importer = RenphoCsvImporter("", user_id)  # For trends analysis
+                trends = importer.get_athletic_trends(days=60)
+                if trends['status'] == 'success':
+                    console.print(f"\n📈 [bold cyan]Athletic Performance Analysis (60 days):[/bold cyan]")
+                    console.print(f"   Weight Change: {trends.get('weight_change_kg', 'N/A')}kg")
+                    console.print(f"   Lean Mass Change: {trends.get('lean_mass_change_kg', 'N/A')}kg")
+                    console.print(f"   Muscle Mass Change: {trends.get('muscle_mass_change', 'N/A')}%")
+                    console.print(f"   Hydration Stability: {trends.get('water_stability_score', 'N/A')}/100")
+                    console.print(f"   Weight Stability: {trends.get('weight_stability_score', 'N/A')}/100")
+                    console.print(f"   Power-to-Weight Potential: {trends['latest_measurement'].get('power_to_weight_potential', 'N/A')}/100")
+            else:
+                console.print("\n💡 No new data found. Your data is up to date.")
+        else:
+            # Auto-discovery mode
+            with console.status("[cyan]Discovering and importing RENPHO CSV files...[/cyan]"):
+                results = RenphoCsvImporter.auto_import_all(directory, user_id)
+
+            if results.get("status") == "no_files_found":
+                console.print("[yellow]⚠️ No RENPHO CSV files found in the directory.[/yellow]")
+                console.print(f"[yellow]💡 Looking for files with columns like: Datum, Zeitraum, Gewicht(kg), BMI, Körperfett(%)[/yellow]")
+                return
+
+            # Display auto-import results
+            table = Table(title="Auto-Import Results", box=box.ROUNDED)
+            table.add_column("File", style="cyan")
+            table.add_column("Status", style="green")
+            table.add_column("New", justify="right", style="blue")
+            table.add_column("Updated", justify="right", style="yellow")
+            table.add_column("Total", justify="right", style="magenta")
+
+            total_new = 0
+            total_updated = 0
+            successful_files = 0
+
+            for filename, file_result in results.items():
+                if file_result["status"] == "success":
+                    r = file_result["results"]
+                    table.add_row(
+                        filename,
+                        "✅ Success",
+                        str(r['new_measurements']),
+                        str(r['updated_measurements']),
+                        str(r['total_processed'])
+                    )
+                    total_new += r['new_measurements']
+                    total_updated += r['updated_measurements']
+                    successful_files += 1
+                else:
+                    table.add_row(filename, "❌ Error", "-", "-", "-")
+
+            console.print(table)
+
+            if successful_files > 0:
+                console.print(f"\n✅ Successfully imported from {successful_files} file(s)")
+                console.print(f"   Total new measurements: {total_new}")
+                console.print(f"   Total updated measurements: {total_updated}")
+
+                # Show athletic trends analysis for auto-import
+                importer = RenphoCsvImporter("", user_id)  # For trends analysis
+                trends = importer.get_athletic_trends(days=60)
+                if trends['status'] == 'success':
+                    console.print(f"\n📈 [bold cyan]Athletic Performance Analysis (60 days):[/bold cyan]")
+                    console.print(f"   Weight Change: {trends.get('weight_change_kg', 'N/A')}kg")
+                    console.print(f"   Lean Mass Change: {trends.get('lean_mass_change_kg', 'N/A')}kg")
+                    console.print(f"   Muscle Mass Change: {trends.get('muscle_mass_change', 'N/A')}%")
+                    console.print(f"   Hydration Stability: {trends.get('water_stability_score', 'N/A')}/100")
+                    console.print(f"   Weight Stability: {trends.get('weight_stability_score', 'N/A')}/100")
+                    console.print(f"   Power-to-Weight Potential: {trends['latest_measurement'].get('power_to_weight_potential', 'N/A')}/100")
+            else:
+                console.print("\n❌ No files were successfully imported.")
+
+    except Exception as e:
+        console.print(f"[red]❌ Import error: {e}[/red]")
+
+
+@renpho.command()
+@click.option("--days", default=60, help="Number of days for athletic trend analysis")
+@click.option("--user-id", default="default", help="User ID for the analysis")
+def trends(days, user_id):
+    """Show athletic body composition trends and performance analysis."""
+    console.print(Panel.fit(f"📈 Athletic Body Composition Analysis ({days} days)", style="bold purple"))
+
+    try:
+        if RenphoCsvImporter is None:
+            console.print("[red]❌ RENPHO CSV importer not available[/red]")
+            return
+
+        importer = RenphoCsvImporter("", user_id)  # Empty CSV path for trends only
+        analysis = importer.get_athletic_trends(days)
+
+        if analysis["status"] == "insufficient_data":
+            console.print(f"[yellow]⚠️ Insufficient data for athletic analysis[/yellow]")
+            console.print(f"[yellow]Found {analysis.get('count', 0)} measurements, need at least 2[/yellow]")
+            return
+
+        # Athletic Performance Analysis
+        table = Table(title="Athletic Performance Changes", box=box.ROUNDED)
+        table.add_column("Metric", style="cyan")
+        table.add_column("Change", style="white")
+        table.add_column("Athletic Impact", style="green")
+
+        if analysis.get("weight_change_kg") is not None:
+            weight_change = analysis["weight_change_kg"]
+            weight_status = "Stable (Good)" if abs(weight_change) < 0.5 else ("Power Loss Risk" if weight_change > 1.0 else "Dehydration Risk" if weight_change < -1.0 else "Monitor")
+            table.add_row("Weight", f"{weight_change:+.1f} kg", weight_status)
+
+        if analysis.get("lean_mass_change_kg") is not None:
+            lean_change = analysis["lean_mass_change_kg"]
+            lean_status = "Power Gains 🚀" if lean_change > 0.3 else ("Muscle Loss" if lean_change < -0.3 else "Stable")
+            table.add_row("Lean Body Mass", f"{lean_change:+.1f} kg", lean_status)
+
+        if analysis.get("muscle_mass_change") is not None:
+            muscle_change = analysis["muscle_mass_change"]
+            muscle_status = "Strength Gains 💪" if muscle_change > 0.2 else ("Catabolism Risk" if muscle_change < -0.2 else "Maintained")
+            table.add_row("Skeletal Muscle", f"{muscle_change:+.1f}%", muscle_status)
+
+        console.print(table)
+
+        # Recovery & Stability Indicators
+        stability_table = Table(title="Recovery & Performance Stability", box=box.ROUNDED)
+        stability_table.add_column("Indicator", style="cyan")
+        stability_table.add_column("Score", style="white")
+        stability_table.add_column("Training Impact", style="green")
+
+        if analysis.get("water_stability_score") is not None:
+            hydration_status = "Excellent" if analysis["water_stability_score"] > 95 else ("Good" if analysis["water_stability_score"] > 85 else "Inconsistent - Monitor Recovery")
+            stability_table.add_row("Hydration Stability", f"{analysis['water_stability_score']}/100", hydration_status)
+
+        if analysis.get("weight_stability_score") is not None:
+            weight_stab_status = "Excellent" if analysis["weight_stability_score"] > 95 else ("Good" if analysis["weight_stability_score"] > 85 else "Variable - Check Nutrition")
+            stability_table.add_row("Weight Stability", f"{analysis['weight_stability_score']}/100", weight_stab_status)
+
+        console.print(stability_table)
+
+        # Current Athletic State
+        latest = analysis["latest_measurement"]
+        console.print(f"\n[bold cyan]🏃 Current Athletic Profile ({latest['date'].strftime('%Y-%m-%d')}):[/bold cyan]")
+        if latest.get("weight_kg"):
+            console.print(f"  • Weight: {latest['weight_kg']:.1f} kg")
+        if latest.get("lean_body_mass_kg"):
+            console.print(f"  • Lean Body Mass: {latest['lean_body_mass_kg']:.1f} kg")
+        if latest.get("body_fat_percent"):
+            console.print(f"  • Body Fat: {latest['body_fat_percent']:.1f}%")
+        if latest.get("water_percent"):
+            console.print(f"  • Hydration: {latest['water_percent']:.1f}%")
+        if latest.get("power_to_weight_potential"):
+            console.print(f"  • Power-to-Weight Potential: {latest['power_to_weight_potential']}/100")
+
+        console.print(f"\n[cyan]🔬 Analysis based on {analysis['measurements_count']} measurements over {analysis['period_days']} days[/cyan]")
+
+    except Exception as e:
+        console.print(f"[red]❌ Error analyzing athletic trends: {e}[/red]")
+
+
+
 @cli.command()
 @click.option("--date", help="Specific date to test (YYYY-MM-DD), defaults to today")
 def test_rhr(date):
@@ -1329,6 +1575,44 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
                 sync_results.append(f"⌚ [red]Garmin Wellness: ❌ {error_msg}[/red]")
         else:
             sync_results.append("⌚ [yellow]Garmin Wellness: ⏭️ Skipped[/yellow]")
+
+        # Auto-import RENPHO CSV data (minimal output)
+        try:
+            if RenphoCsvImporter is not None:
+                # Auto-discover and import RENPHO CSV files
+                import io
+                import contextlib
+                f = io.StringIO()
+                with contextlib.redirect_stdout(f):
+                    results = RenphoCsvImporter.auto_import_all(".", "default")
+
+                if results.get("status") == "no_files_found":
+                    sync_results.append("⚖️ [yellow]RENPHO Body Comp: 💡 No CSV files found (place RENPHO exports in project dir)[/yellow]")
+                else:
+                    total_new = 0
+                    total_updated = 0
+                    successful_files = 0
+
+                    for filename, file_result in results.items():
+                        if file_result["status"] == "success":
+                            r = file_result["results"]
+                            total_new += r['new_measurements']
+                            total_updated += r['updated_measurements']
+                            successful_files += 1
+
+                    if successful_files > 0:
+                        if total_new > 0:
+                            sync_results.append(f"⚖️ [green]RENPHO Body Comp: ✅ {total_new} new measurements imported[/green]")
+                        else:
+                            sync_results.append("⚖️ [green]RENPHO Body Comp: ✅ Up to date[/green]")
+                    else:
+                        sync_results.append("⚖️ [red]RENPHO Body Comp: ❌ Import failed[/red]")
+            else:
+                sync_results.append("⚖️ [yellow]RENPHO Body Comp: ⚠️ CSV importer not available[/yellow]")
+        except Exception as e:
+            error_msg = f"RENPHO auto-import failed: {e}"
+            errors.append(error_msg)
+            sync_results.append(f"⚖️ [red]RENPHO Body Comp: ❌ {error_msg}[/red]")
 
 
     # Display sync results outside the panel

@@ -53,30 +53,35 @@ class Database:
 
     def migrate_schema(self):
         """Apply schema migrations for new columns."""
-        try:
-            # Check if resting_heart_rate column exists in hrv_data
-            result = self.engine.execute("PRAGMA table_info(hrv_data)")
-            columns = [row[1] for row in result]
+        # Use a connection to execute raw SQL for migrations
+        from sqlalchemy import text
 
-            # Add missing heart rate columns to hrv_data if they don't exist
-            if 'resting_heart_rate' not in columns:
-                self.engine.execute("ALTER TABLE hrv_data ADD COLUMN resting_heart_rate INTEGER")
-            if 'max_heart_rate' not in columns:
-                self.engine.execute("ALTER TABLE hrv_data ADD COLUMN max_heart_rate INTEGER")
-            if 'min_heart_rate' not in columns:
-                self.engine.execute("ALTER TABLE hrv_data ADD COLUMN min_heart_rate INTEGER")
+        with self.engine.connect() as connection:
+            try:
+                # Check for BodyComposition table existence before altering
+                body_comp_result = connection.execute(text("PRAGMA table_info(body_composition)"))
+                # This line running without error means the table exists.
+            except Exception:
+                # If the table doesn't exist, create_all will handle it.
+                # No migration needed yet.
+                return
 
-            # Remove heart rate columns from wellness_data if they exist (cleanup)
-            wellness_result = self.engine.execute("PRAGMA table_info(wellness_data)")
-            wellness_columns = [row[1] for row in wellness_result]
+            try:
+                # Check for HRVData table existence before altering
+                hrv_result = connection.execute(text("PRAGMA table_info(hrv_data)"))
+                columns = [row[1] for row in hrv_result]
 
-            # SQLite doesn't support DROP COLUMN, so we note the cleanup needed
-            if any(col in wellness_columns for col in ['resting_heart_rate', 'max_heart_rate', 'min_heart_rate']):
-                print("Note: Heart rate columns found in wellness_data table - consider manual cleanup")
+                # Add missing heart rate columns to hrv_data if they don't exist
+                if 'resting_heart_rate' not in columns:
+                    connection.execute(text("ALTER TABLE hrv_data ADD COLUMN resting_heart_rate INTEGER"))
+                if 'max_heart_rate' not in columns:
+                    connection.execute(text("ALTER TABLE hrv_data ADD COLUMN max_heart_rate INTEGER"))
+                if 'min_heart_rate' not in columns:
+                    connection.execute(text("ALTER TABLE hrv_data ADD COLUMN min_heart_rate INTEGER"))
 
-        except Exception as e:
-            # Migration failed, but don't crash the app
-            print(f"Schema migration warning: {e}")
+                connection.commit()
+            except Exception as e:
+                print(f"HRVData schema migration warning: {e}")
 
     def close(self):
         """Close database connection."""

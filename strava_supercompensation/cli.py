@@ -85,7 +85,7 @@ def auth():
 
 
 @cli.command()
-@click.option("--days", default=30, help="Number of days to sync")
+@click.option("--days", default=60, help="Number of days to sync")
 def sync(days):
     """Sync activities from Strava."""
     console.print(Panel.fit(f"🔄 Syncing Activities (last {days} days)", style="bold blue"))
@@ -108,7 +108,7 @@ def sync(days):
         console.print(f"[green]✅ Successfully synced {count} activities![/green]")
 
         # Show recent activities
-        recent = client.get_recent_activities(days=7)
+        recent = client.get_recent_activities(days=60)
         if recent:
             table = Table(title="Recent Activities", box=box.ROUNDED)
             table.add_column("Date", style="cyan")
@@ -141,7 +141,7 @@ def sync(days):
                 console.print(f"[green]✅ Successfully synced {count} activities![/green]")
 
                 # Show recent activities after successful retry
-                recent = client.get_recent_activities(days=7)
+                recent = client.get_recent_activities(days=60)
                 if recent:
                     table = Table(title="Recent Activities", box=box.ROUNDED)
                     table.add_column("Date", style="cyan")
@@ -200,11 +200,13 @@ def analyze(days):
             table.add_column("Form", style="green", width=5)
             table.add_column("HRV", style="red", width=4)
             table.add_column("Sleep", style="purple", width=5)
+            table.add_column("RHR", style="yellow", width=4)
+            table.add_column("BP", style="cyan", width=9)
 
             # Get wellness data if available
             try:
-                from strava_supercompensation.db.database import get_db
-                from strava_supercompensation.db.models import Activity, HRVData, SleepData
+                from .db import get_db
+                from .db.models import Activity, HRVData, SleepData, BloodPressure, WellnessData
                 from datetime import datetime as dt, timedelta
                 from sqlalchemy import func
 
@@ -219,13 +221,19 @@ def analyze(days):
                             func.date(Activity.start_date) == date_obj
                         ).order_by(Activity.training_load.desc()).first()
 
-                        # Get wellness data
+                        # Get wellness data - handle both date and datetime comparisons
+                        # For HRV and Sleep (stored at midnight)
+                        date_start = dt.combine(date_obj, dt.min.time())
+                        date_end = date_start + timedelta(days=1)
+
                         hrv = session.query(HRVData).filter(
-                            func.date(HRVData.date) == date_obj
+                            HRVData.date >= date_start,
+                            HRVData.date < date_end
                         ).first()
 
                         sleep = session.query(SleepData).filter(
-                            func.date(SleepData.date) == date_obj
+                            SleepData.date >= date_start,
+                            SleepData.date < date_end
                         ).first()
 
                         # Determine activity and intensity
@@ -264,6 +272,27 @@ def analyze(days):
                         hrv_rmssd = f"{hrv.hrv_rmssd:3.0f}" if hrv and hrv.hrv_rmssd else "—"
                         sleep_score = f"{sleep.sleep_score:3.0f}" if sleep and sleep.sleep_score else "—"
 
+                        # Get blood pressure data
+                        bp = session.query(BloodPressure).filter(
+                            BloodPressure.date >= date_start,
+                            BloodPressure.date < date_end
+                        ).first()
+
+                        # Get RHR from HRV data (Garmin) or BP data (Omron)
+                        hrv = session.query(HRVData).filter(
+                            HRVData.date >= date_start,
+                            HRVData.date < date_end
+                        ).first()
+
+                        # Use OMRON BP monitor RHR as primary source
+                        if bp and bp.heart_rate:
+                            rhr = f"{bp.heart_rate}"
+                        else:
+                            rhr = "—"
+
+                        bp_str = f"{bp.systolic}/{bp.diastolic}" if bp and bp.systolic and bp.diastolic else "—"
+
+
                         table.add_row(
                             date_str,
                             activity_display,
@@ -273,6 +302,8 @@ def analyze(days):
                             f"{h['form']:.1f}",
                             hrv_rmssd,
                             sleep_score,
+                            rhr,
+                            bp_str,
                         )
 
             except Exception as e:
@@ -281,8 +312,8 @@ def analyze(days):
 
                 # Try to get wellness data even in fallback mode
                 try:
-                    from strava_supercompensation.db.database import get_db
-                    from strava_supercompensation.db.models import HRVData, SleepData
+                    from .db import get_db
+                    from .db.models import HRVData, SleepData
                     db = get_db()
                     wellness_available = True
                 except:
@@ -314,7 +345,7 @@ def analyze(days):
                             date_obj = dt.fromisoformat(h['date']).date()
                             with db.get_session() as session:
                                 from sqlalchemy import func
-                                from strava_supercompensation.db.models import Activity
+                                from .db.models import Activity, BloodPressure
 
                                 # Try to get activity info
                                 activity = session.query(Activity).filter(
@@ -335,13 +366,40 @@ def analyze(days):
                                         activity_display = activity_type
 
                                 # Get wellness data
-                                hrv = session.query(HRVData).filter(func.date(HRVData.date) == date_obj).first()
-                                sleep = session.query(SleepData).filter(func.date(SleepData.date) == date_obj).first()
+                                from .db.models import WellnessData
+                                date_start = dt.combine(date_obj, dt.min.time())
+                                date_end = date_start + timedelta(days=1)
+
+                                hrv = session.query(HRVData).filter(
+                                    HRVData.date >= date_start,
+                                    HRVData.date < date_end
+                                ).first()
+                                sleep = session.query(SleepData).filter(
+                                    SleepData.date >= date_start,
+                                    SleepData.date < date_end
+                                ).first()
+                                bp = session.query(BloodPressure).filter(
+                                    BloodPressure.date >= date_start,
+                                    BloodPressure.date < date_end
+                                ).first()
+                                wellness = session.query(WellnessData).filter(
+                                    WellnessData.date >= date_start,
+                                    WellnessData.date < date_end
+                                ).first()
 
                                 hrv_rmssd = f"{hrv.hrv_rmssd:3.0f}" if hrv and hrv.hrv_rmssd else "—"
                                 sleep_score = f"{sleep.sleep_score:3.0f}" if sleep and sleep.sleep_score else "—"
+
+                                # Use OMRON BP monitor RHR as primary source
+                                if bp and bp.heart_rate:
+                                    rhr = f"{bp.heart_rate}"
+                                else:
+                                    rhr = "—"
+
+                                bp_str = f"{bp.systolic}/{bp.diastolic}" if bp and bp.systolic and bp.diastolic else "—"
                         except:
-                            pass  # Keep default values
+                            rhr = "—"
+                            bp_str = "—"
 
                     table.add_row(
                         date_str,
@@ -352,6 +410,8 @@ def analyze(days):
                         f"{h['form']:.1f}",
                         hrv_rmssd,
                         sleep_score,
+                        rhr,
+                        bp_str,
                     )
 
             console.print("\n", table)
@@ -705,9 +765,13 @@ def reset():
         auth_manager = AuthManager()
         auth_manager.logout()
 
-        # Clear Garmin authentication
-        garmin_auth = get_garmin_auth()
-        garmin_auth.revoke_tokens()
+        # Clear Garmin authentication (optional)
+        try:
+            from .garmin.auth import get_garmin_auth
+            garmin_auth = get_garmin_auth()
+            garmin_auth.revoke_tokens()
+        except (ImportError, Exception):
+            pass  # Garmin auth is optional
 
         # Reset database
         from .db import get_db
@@ -718,6 +782,94 @@ def reset():
         console.print("[green]✅ Application reset successfully![/green]")
     except Exception as e:
         console.print(f"[red]❌ Error resetting application: {e}[/red]")
+
+
+@cli.command()
+@click.option("--file", required=True, help="Path to blood pressure CSV file")
+def import_bp(file):
+    """Import blood pressure data from CSV file."""
+    console.print(Panel.fit(f"📊 Importing Blood Pressure Data", style="bold blue"))
+
+    import csv
+    from datetime import datetime
+    from pathlib import Path
+
+    if not Path(file).exists():
+        console.print(f"[red]❌ File not found: {file}[/red]")
+        return
+
+    try:
+        from .db import get_db
+        from .db.models import BloodPressure
+
+        db = get_db()
+        imported = 0
+        skipped = 0
+
+        # German month mapping
+        german_months = {
+            'Jan.': 1, 'Feb.': 2, 'Mär.': 3, 'Apr.': 4,
+            'Mai': 5, 'Jun.': 6, 'Jul.': 7, 'Aug.': 8,
+            'Sep.': 9, 'Okt.': 10, 'Nov.': 11, 'Dez.': 12
+        }
+
+        with open(file, 'r', encoding='utf-8') as csvfile:
+            reader = csv.DictReader(csvfile)
+
+            with db.get_session() as session:
+                for row in reader:
+                    try:
+                        # Parse German date format "23 Sep. 2025"
+                        date_str = row['Datum']
+                        time_str = row.get('Zeit', '00:00')
+
+                        # Parse date
+                        parts = date_str.split()
+                        day = int(parts[0])
+                        month = german_months.get(parts[1], 1)
+                        year = int(parts[2])
+
+                        # Parse time
+                        time_parts = time_str.split(':')
+                        hour = int(time_parts[0])
+                        minute = int(time_parts[1]) if len(time_parts) > 1 else 0
+
+                        # Create datetime
+                        date_time = datetime(year, month, day, hour, minute)
+
+                        # Check if already exists
+                        existing = session.query(BloodPressure).filter_by(date=date_time).first()
+                        if existing:
+                            skipped += 1
+                            continue
+
+                        # Create new BP record
+                        bp = BloodPressure(
+                            date=date_time,
+                            systolic=int(row['Systolisch (mmHg)']),
+                            diastolic=int(row['Diastolisch (mmHg)']),
+                            heart_rate=int(row['Puls (bpm)']),
+                            device=row.get('Gerät', 'Unknown'),
+                            irregular_heartbeat=row.get('Unregelmäßiger Herzschlag festgestellt', '').strip() == 'Ja',
+                            afib_detected=row.get('Mögliches AFib', '').strip() == 'Ja',
+                            notes=row.get('Notizen', '').replace('-', '').strip() or None
+                        )
+
+                        session.add(bp)
+                        imported += 1
+
+                    except (ValueError, KeyError) as e:
+                        console.print(f"[yellow]⚠️ Skipping row due to error: {e}[/yellow]")
+                        continue
+
+                session.commit()
+
+        console.print(f"[green]✅ Imported {imported} blood pressure readings[/green]")
+        if skipped > 0:
+            console.print(f"[yellow]ℹ️ Skipped {skipped} duplicate entries[/yellow]")
+
+    except Exception as e:
+        console.print(f"[red]❌ Error importing data: {e}[/red]")
 
 
 @cli.group()
@@ -760,7 +912,7 @@ def test():
 
 
 @garmin.command()
-@click.option("--days", default=7, help="Number of days to sync")
+@click.option("--days", default=60, help="Number of days to sync")
 def sync(days):
     """Sync essential HRV and sleep data from personal Garmin Connect."""
     console.print(Panel.fit(f"🔄 Syncing Personal Garmin Data ({days} days)", style="bold blue"))
@@ -943,7 +1095,7 @@ def login(code):
 
 
 @garmin.command()
-@click.option("--days", default=7, help="Number of days to sync")
+@click.option("--days", default=60, help="Number of days to sync")
 @click.option("--code", help="MFA verification code (optional - will prompt if not provided)")
 def sync_mfa(days, code):
     """Sync wellness data using MFA-enabled client."""
@@ -1009,8 +1161,68 @@ def sync_mfa(days, code):
 
 
 @cli.command()
-@click.option("--strava-days", default=30, help="Days of Strava data to sync")
-@click.option("--garmin-days", default=30, help="Days of Garmin data to sync")
+@click.option("--date", help="Specific date to test (YYYY-MM-DD), defaults to today")
+def test_rhr(date):
+    """Test RHR fetching from Garmin with debug output."""
+    from datetime import datetime, date as date_obj, timedelta
+
+    # Parse date or use today
+    if date:
+        try:
+            test_date = datetime.strptime(date, '%Y-%m-%d').date()
+        except ValueError:
+            console.print("[red]Invalid date format. Use YYYY-MM-DD[/red]")
+            return
+    else:
+        test_date = date_obj.today()
+
+    console.print(f"🧪 Testing RHR fetch for {test_date}")
+
+    try:
+        if get_garmin_client is None:
+            console.print("[red]Garmin client not available[/red]")
+            return
+
+        garmin_client = get_garmin_client()
+
+        # Test the specific HRV sync method with debug output
+        console.print(f"📡 Testing Garmin HRV sync for {test_date}...")
+        result = garmin_client._sync_hrv_for_date(test_date)
+
+        if result:
+            console.print("[green]✅ HRV sync completed[/green]")
+
+            # Check what was saved to database
+            from .db import get_db
+            from .db.models import HRVData
+
+            db = get_db()
+            with db.get_session() as session:
+                hrv_record = session.query(HRVData).filter(
+                    HRVData.date >= datetime.combine(test_date, datetime.min.time()),
+                    HRVData.date < datetime.combine(test_date, datetime.min.time()) + timedelta(days=1)
+                ).first()
+
+                if hrv_record:
+                    console.print(f"📊 Database record:")
+                    console.print(f"  • HRV Score: {hrv_record.hrv_score}")
+                    console.print(f"  • Resting HR: {hrv_record.resting_heart_rate}")
+                    console.print(f"  • Max HR: {hrv_record.max_heart_rate}")
+                    console.print(f"  • Min HR: {hrv_record.min_heart_rate}")
+                else:
+                    console.print("[yellow]⚠️ No HRV record found in database[/yellow]")
+        else:
+            console.print("[red]❌ HRV sync failed[/red]")
+
+    except Exception as e:
+        console.print(f"[red]💥 Test failed: {e}[/red]")
+        import traceback
+        console.print(traceback.format_exc())
+
+
+@cli.command()
+@click.option("--strava-days", default=60, help="Days of Strava data to sync")
+@click.option("--garmin-days", default=60, help="Days of Garmin data to sync")
 @click.option("--plan-days", default=30, help="Training plan length (7 or 30 days)")
 @click.option("--skip-strava", is_flag=True, help="Skip Strava sync")
 @click.option("--skip-garmin", is_flag=True, help="Skip Garmin sync")
@@ -1020,15 +1232,18 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
 
     errors = []
 
-    # Step 1: Combined Data Sync (Strava + Garmin)
+    # Step 1: Data Import & Sync
     console.print("")  # Spacing
+    console.print(Panel.fit("📊 Step 1: Importing Training Data", style="bold blue"))
+
     # Collect sync status for summary panel
     sync_results = []
 
-    # Sync Strava data (minimal output)
-    if not skip_strava:
-        try:
-            with console.status("[cyan]Syncing Strava activities...[/cyan]"):
+    # Single spinner for entire data import process
+    with console.status("[cyan]Importing data from all sources (Strava, Omron, Garmin)...[/cyan]", spinner="dots"):
+        # Sync Strava data (minimal output)
+        if not skip_strava:
+            try:
                 ctx = click.get_current_context()
                 main_sync = None
                 for command_name, command in cli.commands.items():
@@ -1044,19 +1259,60 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
                         ctx.invoke(main_sync, days=strava_days)
                 else:
                     raise Exception("Main sync command not found")
-            sync_results.append("🏃‍♂️ [green]Strava Activities: ✅ Synced[/green]")
-        except Exception as e:
-            error_msg = f"Strava sync failed: {e}"
-            errors.append(error_msg)
-            sync_results.append(f"🏃‍♂️ [red]Strava Activities: ❌ {error_msg}[/red]")
-    else:
-        sync_results.append("🏃‍♂️ [yellow]Strava Activities: ⏭️ Skipped[/yellow]")
+                sync_results.append("🏃‍♂️ [green]Strava Activities: ✅ Synced[/green]")
+            except Exception as e:
+                error_msg = f"Strava sync failed: {e}"
+                errors.append(error_msg)
+                sync_results.append(f"🏃‍♂️ [red]Strava Activities: ❌ {error_msg}[/red]")
+        else:
+            sync_results.append("🏃‍♂️ [yellow]Strava Activities: ⏭️ Skipped[/yellow]")
 
-    # Sync Garmin data (minimal output)
-    if not skip_garmin:
+        # Import Omron blood pressure data from CSV files
         try:
-            if get_garmin_client is not None:
-                with console.status("[cyan]Syncing Garmin wellness data...[/cyan]"):
+            import glob
+            from pathlib import Path
+
+            # Find all Omron CSV files in the project directory
+            omron_files = glob.glob("*.csv")
+            omron_files = [f for f in omron_files if "OMRON" in f.upper()]
+
+            if omron_files:
+                ctx = click.get_current_context()
+                total_imported = 0
+
+                # Import each Omron CSV file
+                for csv_file in omron_files:
+                    try:
+                        # Suppress verbose output
+                        import io
+                        import contextlib
+                        f = io.StringIO()
+                        with contextlib.redirect_stdout(f):
+                            ctx.invoke(import_bp, file=csv_file)
+                        # Parse the output to get import count
+                        output = f.getvalue()
+                        if "Imported" in output:
+                            # Extract number from "Imported X blood pressure readings"
+                            import re
+                            match = re.search(r'Imported (\d+)', output)
+                            if match:
+                                total_imported += int(match.group(1))
+                    except Exception:
+                        pass  # Continue with other files
+
+                if total_imported > 0:
+                    sync_results.append(f"🩺 [green]Omron BP Data: ✅ {total_imported} readings imported[/green]")
+                else:
+                    sync_results.append("🩺 [yellow]Omron BP Data: ℹ️ No new data[/yellow]")
+            else:
+                sync_results.append("🩺 [dim]Omron BP Data: No CSV files found[/dim]")
+        except Exception as e:
+            sync_results.append(f"🩺 [yellow]Omron BP Data: ⚠️ Import failed[/yellow]")
+
+        # Sync Garmin data (minimal output)
+        if not skip_garmin:
+            try:
+                if get_garmin_client is not None:
                     ctx = click.get_current_context()
                     # Suppress verbose output from Garmin sync
                     import io
@@ -1064,19 +1320,16 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
                     f = io.StringIO()
                     with contextlib.redirect_stdout(f):
                         ctx.invoke(garmin.commands["sync-mfa"], days=garmin_days)
-                sync_results.append("⌚ [green]Garmin Wellness: ✅ Synced[/green]")
-            else:
-                sync_results.append("⌚ [yellow]Garmin Wellness: ⚠️ Unavailable[/yellow]")
-        except Exception as e:
-            error_msg = f"Garmin sync failed: {e}"
-            errors.append(error_msg)
-            sync_results.append(f"⌚ [red]Garmin Wellness: ❌ {error_msg}[/red]")
-    else:
-        sync_results.append("⌚ [yellow]Garmin Wellness: ⏭️ Skipped[/yellow]")
+                    sync_results.append("⌚ [green]Garmin Wellness: ✅ Synced[/green]")
+                else:
+                    sync_results.append("⌚ [yellow]Garmin Wellness: ⚠️ Unavailable[/yellow]")
+            except Exception as e:
+                error_msg = f"Garmin sync failed: {e}"
+                errors.append(error_msg)
+                sync_results.append(f"⌚ [red]Garmin Wellness: ❌ {error_msg}[/red]")
+        else:
+            sync_results.append("⌚ [yellow]Garmin Wellness: ⏭️ Skipped[/yellow]")
 
-    # Create Step 1 header panel
-    step1_header = Panel("📱 Step 1: Syncing Strava Activities", box=box.HEAVY, style="bold blue")
-    console.print(step1_header)
 
     # Display sync results outside the panel
     for result in sync_results:

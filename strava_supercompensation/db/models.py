@@ -143,6 +143,11 @@ class HRVData(Base):
     stress_qualifier = Column(String(50))  # low, medium, high, overreaching
     recovery_advisor = Column(String(255))  # Recovery recommendations
 
+    # Heart Rate metrics (cardiovascular recovery indicators)
+    resting_heart_rate = Column(Integer)  # Resting heart rate (bpm)
+    max_heart_rate = Column(Integer)  # Maximum heart rate (bpm)
+    min_heart_rate = Column(Integer)  # Minimum heart rate (bpm)
+
     # Raw data for analysis
     baseline_low_upper = Column(Float)
     baseline_balanced_lower = Column(Float)
@@ -234,6 +239,7 @@ class WellnessData(Base):
     body_battery_highest = Column(Float)  # Highest Body Battery level
     body_battery_lowest = Column(Float)  # Lowest Body Battery level
 
+
     # Respiration
     avg_respiration = Column(Float)  # Average respiration rate
     max_respiration = Column(Float)  # Maximum respiration rate
@@ -266,6 +272,27 @@ class WellnessData(Base):
 
     def __repr__(self):
         return f"<WellnessData(date={self.date}, stress_avg={self.stress_avg}, steps={self.total_steps})>"
+
+
+class BloodPressure(Base):
+    """Blood pressure and resting heart rate measurements."""
+
+    __tablename__ = "blood_pressure"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(String(50), default="default")
+    date = Column(DateTime, nullable=False, unique=True)
+    systolic = Column(Integer)  # mmHg
+    diastolic = Column(Integer)  # mmHg
+    heart_rate = Column(Integer)  # Resting Heart Rate (bpm)
+    device = Column(String(100))  # e.g., "X7 Smart"
+    irregular_heartbeat = Column(Boolean, default=False)
+    afib_detected = Column(Boolean, default=False)
+    notes = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    def __repr__(self):
+        return f"<BloodPressure(date={self.date}, bp={self.systolic}/{self.diastolic}, rhr={self.heart_rate})>"
 
 
 class PeriodizationState(Base):

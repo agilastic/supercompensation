@@ -218,6 +218,8 @@ class GarminClient:
 
         # Show initial status
         print(f"Syncing {len(days_to_process)} days of Garmin data...")
+        print(f"📅 Date range: {start_date} to {end_date} ({total_days} days total)")
+        print(f"📊 Already synced: HRV={len(existing_hrv_dates)}, Sleep={len(existing_sleep_dates)}, Wellness={len(existing_wellness_dates)} days")
 
         # Sync day by day
         for idx, (sync_date, needs_hrv, needs_sleep, needs_wellness) in enumerate(days_to_process, 1):
@@ -261,18 +263,261 @@ class GarminClient:
     def _sync_hrv_for_date(self, date: datetime.date) -> bool:
         """Sync HRV data for a specific date."""
         try:
-            # Use garth built-in method for HRV data
-            hrv_records = garth.DailyHRV.list()
+            # Use garth built-in method for HRV data with date range
+            # Try to get HRV data for a range around the target date to ensure we catch it
+            start_date = date - timedelta(days=1)  # Day before
+            hrv_records = garth.DailyHRV.list(start_date, 3)  # 3 days range
 
             # Find record for the specific date
             hrv_record = None
             for record in hrv_records:
-                if record.calendar_date == date:
+                if hasattr(record, 'calendar_date') and record.calendar_date == date:
                     hrv_record = record
                     break
 
             if not hrv_record:
+                # Also try without date range as fallback (in case the API changed)
+                try:
+                    all_hrv_records = garth.DailyHRV.list()
+                    for record in all_hrv_records:
+                        if hasattr(record, 'calendar_date') and record.calendar_date == date:
+                            hrv_record = record
+                            break
+                except:
+                    pass
+
+            if not hrv_record:
                 return False
+
+            # Get heart rate data from Garmin using multiple methods
+            resting_hr = None
+            max_hr = None
+            min_hr = None
+
+            # First, check if RHR is directly available in the HRV record itself
+            if hasattr(hrv_record, 'resting_heart_rate'):
+                resting_hr = hrv_record.resting_heart_rate
+            elif hasattr(hrv_record, 'restingHeartRate'):
+                resting_hr = hrv_record.restingHeartRate
+            elif hasattr(hrv_record, 'rhr'):
+                resting_hr = hrv_record.rhr
+            elif hasattr(hrv_record, 'baseline_low_upper'):
+                # Sometimes RHR is in the HRV baseline data
+                resting_hr = hrv_record.baseline_low_upper
+
+            # Alternative: Try to get RHR from DailyHeartRate if available
+            if not resting_hr:
+                try:
+                    daily_hr = garth.DailyHeartRate.get(date.strftime('%Y-%m-%d'))
+                    if daily_hr:
+                        resting_hr = (getattr(daily_hr, 'restingHeartRate', None) or
+                                     getattr(daily_hr, 'resting_heart_rate', None) or
+                                     getattr(daily_hr, 'rhr', None))
+                except:
+                    pass
+
+            # Alternative: Try Activities for that day (activities often contain RHR)
+            if not resting_hr:
+                try:
+                    activities = garth.Activities.list(date, 1)  # Get activities for the date
+                    if activities:
+                        for activity in activities:
+                            if hasattr(activity, 'averageHR') or hasattr(activity, 'minHR'):
+                                # Use minimum HR from activities as an approximation
+                                min_hr = getattr(activity, 'minHR', None)
+                                if min_hr and min_hr < 100:  # Reasonable RHR range
+                                    resting_hr = min_hr
+                                    break
+                except:
+                    pass
+
+            # Get heart rate data using available garth classes
+            # Write debug to file so we can see what happens
+            debug_log_path = "/Users/alex/workspace/supercompensation/rhr_debug.log"
+            with open(debug_log_path, "a") as debug_file:
+                debug_file.write(f"\n{'='*50}\n")
+                debug_file.write(f"🔍 RHR Debug for {date} at {datetime.now()}\n")
+
+                # Debug: Show what's in the HRV record
+                if hrv_record:
+                    hrv_attrs = [attr for attr in dir(hrv_record) if not attr.startswith('_')]
+                    debug_file.write(f"📊 HRV Record attributes: {hrv_attrs}\n")
+
+                    # Check specific fields that might contain heart rate data
+                    hr_related_attrs = [attr for attr in hrv_attrs if any(keyword in attr.lower()
+                                      for keyword in ['heart', 'hr', 'rate', 'rhr', 'baseline', 'pulse'])]
+                    if hr_related_attrs:
+                        debug_file.write(f"💓 HR-related attributes: {hr_related_attrs}\n")
+                        for attr in hr_related_attrs:
+                            try:
+                                value = getattr(hrv_record, attr)
+                                debug_file.write(f"  • {attr}: {value}\n")
+                            except:
+                                debug_file.write(f"  • {attr}: <unable to access>\n")
+
+                    if resting_hr:
+                        debug_file.write(f"✅ Found RHR {resting_hr} directly from HRV record\n")
+                    else:
+                        debug_file.write(f"⚠️  No RHR found in HRV record, trying other methods...\n")
+
+                # Test the new methods we added
+                if not resting_hr:
+                    debug_file.write(f"🫀 Testing DailyHeartRate class...\n")
+                    try:
+                        daily_hr = garth.DailyHeartRate.get(date.strftime('%Y-%m-%d'))
+                        if daily_hr:
+                            hr_attrs = [attr for attr in dir(daily_hr) if not attr.startswith('_')]
+                            debug_file.write(f"📊 DailyHeartRate attributes: {hr_attrs}\n")
+                    except Exception as e:
+                        debug_file.write(f"⚠️  DailyHeartRate failed: {e}\n")
+
+                    debug_file.write(f"🏃 Testing Activities for RHR approximation...\n")
+                    try:
+                        activities = garth.Activities.list(date, 1)
+                        if activities:
+                            debug_file.write(f"📊 Found {len(activities)} activities for {date}\n")
+                            for i, activity in enumerate(activities[:3]):  # Check first 3
+                                activity_attrs = [attr for attr in dir(activity) if not attr.startswith('_') and 'hr' in attr.lower()]
+                                if activity_attrs:
+                                    debug_file.write(f"  Activity {i} HR attrs: {activity_attrs}\n")
+                        else:
+                            debug_file.write(f"📊 No activities found for {date}\n")
+                    except Exception as e:
+                        debug_file.write(f"⚠️  Activities failed: {e}\n")
+
+                # Method 1: Try multiple garth classes for heart rate data
+                debug_file.write(f"🔍 Trying available garth classes for HR data...\n")
+
+                # Try UserProfile (might have baseline RHR)
+                try:
+                    debug_file.write(f"👤 Trying UserProfile for baseline RHR...\n")
+                    profile = garth.UserProfile.get()
+                    if profile:
+                        resting_hr = (getattr(profile, 'restingHeartRate', None) or
+                                     getattr(profile, 'resting_heart_rate', None))
+                        if resting_hr:
+                            debug_file.write(f"✅ Found baseline RHR {resting_hr} from UserProfile\n")
+                        else:
+                            profile_attrs = [attr for attr in dir(profile) if not attr.startswith('_') and 'heart' in attr.lower()]
+                            debug_file.write(f"🔍 UserProfile HR attrs: {profile_attrs}\n")
+                except Exception as e:
+                    debug_file.write(f"⚠️  UserProfile failed: {e}\n")
+
+                # Try HRVData class (might have embedded HR)
+                if not resting_hr:
+                    try:
+                        debug_file.write(f"💓 Trying HRVData class for embedded HR...\n")
+                        hrv_data = garth.HRVData.get(date.strftime('%Y-%m-%d'))
+                        if hrv_data:
+                            resting_hr = (getattr(hrv_data, 'restingHeartRate', None) or
+                                         getattr(hrv_data, 'resting_heart_rate', None))
+                            if resting_hr:
+                                debug_file.write(f"✅ Found RHR {resting_hr} from HRVData\n")
+                            else:
+                                hrv_attrs = [attr for attr in dir(hrv_data) if not attr.startswith('_') and 'heart' in attr.lower()]
+                                debug_file.write(f"🔍 HRVData HR attrs: {hrv_attrs}\n")
+                    except Exception as e:
+                        debug_file.write(f"⚠️  HRVData failed: {e}\n")
+
+                # Try DailyBodyBatteryStress
+                if not resting_hr:
+                    try:
+                        debug_file.write(f"🔋 Trying DailyBodyBatteryStress for {date}...\n")
+                        bb_data = garth.DailyBodyBatteryStress.get(date.strftime('%Y-%m-%d'))
+                        if bb_data:
+                            # Try accessing body battery raw data
+                            if hasattr(bb_data, 'body_battery_readings') and bb_data.body_battery_readings:
+                                debug_file.write(f"📊 Found body_battery_readings data\n")
+                                # Sometimes RHR is embedded in the readings
+                                readings = bb_data.body_battery_readings
+                                if readings and len(readings) > 0:
+                                    first_reading = readings[0]
+                                    if hasattr(first_reading, 'restingHeartRate'):
+                                        resting_hr = first_reading.restingHeartRate
+                                        debug_file.write(f"✅ Found RHR {resting_hr} in body battery readings\n")
+
+                    except Exception as e:
+                        debug_file.write(f"⚠️  DailyBodyBatteryStress enhanced failed: {e}\n")
+
+                # Method 2: Try heart rate specific endpoints
+                if not resting_hr:
+                    debug_file.write(f"🔄 Trying heart rate specific endpoints...\n")
+
+                    # Try heart rate specific endpoints that might work
+                    hr_endpoints = [
+                        f"/wellness-service/wellness/heartRate/daily/{date.strftime('%Y-%m-%d')}",
+                        f"/metrics-service/metrics/heartRate/{date.strftime('%Y-%m-%d')}",
+                        f"/userstats-service/heartRate/daily/{date.strftime('%Y-%m-%d')}",
+                        f"/summary-service/stats/heartRate/{date.strftime('%Y-%m-%d')}",
+                        f"/wellness-service/wellness/daily/{date.strftime('%Y-%m-%d')}"
+                    ]
+
+                    for endpoint in hr_endpoints:
+                        try:
+                            debug_file.write(f"🔧 Trying HR endpoint: {endpoint}\n")
+                            data = garth.connectapi(endpoint)
+
+                            if data and isinstance(data, dict):
+                                debug_file.write(f"📊 HR API returned {type(data)} with {len(data)} keys\n")
+
+                                # Check for HR data in various forms
+                                resting_hr = (data.get("restingHeartRate") or
+                                             data.get("resting_heart_rate") or
+                                             data.get("restingHR") or
+                                             data.get("restingHr") or
+                                             data.get("lowestHeartRate") or
+                                             data.get("minHeartRate") or
+                                             data.get("dailyRestingHeartRate"))
+
+                                if resting_hr:
+                                    debug_file.write(f"✅ Found RHR {resting_hr} via {endpoint}\n")
+                                    max_hr = (data.get("maxHeartRate") or data.get("maximumHeartRate"))
+                                    min_hr = (data.get("minHeartRate") or data.get("minimumHeartRate"))
+                                    break
+                                else:
+                                    # Show available keys for debugging
+                                    api_keys = list(data.keys())[:15]
+                                    debug_file.write(f"🔍 HR API keys: {api_keys}\n")
+
+                            elif data and isinstance(data, list) and len(data) > 0:
+                                debug_file.write(f"📊 HR API returned list with {len(data)} items\n")
+                                # Sometimes HR data is in a list format
+                                for item in data[:3]:  # Check first 3 items
+                                    if isinstance(item, dict):
+                                        resting_hr = (item.get("restingHeartRate") or
+                                                     item.get("resting_heart_rate") or
+                                                     item.get("restingHR") or
+                                                     item.get("value"))
+                                        if resting_hr:
+                                            debug_file.write(f"✅ Found RHR {resting_hr} in list via {endpoint}\n")
+                                            break
+                                if resting_hr:
+                                    break
+
+                        except Exception as api_e:
+                            debug_file.write(f"⚠️  HR API {endpoint} failed: {api_e}\n")
+                            continue
+
+                # Final result check
+                if resting_hr or max_hr or min_hr:
+                    debug_file.write(f"✅ Final HR data for {date}: RHR={resting_hr}, Max={max_hr}, Min={min_hr}\n")
+                else:
+                    debug_file.write(f"❌ No heart rate data found for {date} after trying all methods\n")
+
+            # Fallback: Check if heart rate data is embedded in HRV record
+            if not resting_hr and hrv_record:
+                # Some Garmin devices include HR data with HRV measurements
+                resting_hr = getattr(hrv_record, 'resting_heart_rate', None)
+                max_hr = getattr(hrv_record, 'max_heart_rate', None)
+                min_hr = getattr(hrv_record, 'min_heart_rate', None)
+                if resting_hr:
+                    print(f"✅ Found RHR {resting_hr} embedded in HRV record for {date}")
+
+            # Debug: show what heart rate data we found
+            if resting_hr or max_hr or min_hr:
+                print(f"✅ Heart rate data for {date}: RHR={resting_hr}, Max={max_hr}, Min={min_hr}")
+            else:
+                print(f"⚠️  No heart rate data found for {date}")
 
             # Extract HRV metrics from garth record
             # Use nightly RMSSD as primary metric (scientifically correct)
@@ -287,6 +532,9 @@ class GarminClient:
             if hrv_score is None and hrv_rmssd is None:
                 return False
 
+            # Note: RHR will only be populated from OMRON blood pressure data, not estimated
+            # Garmin API RHR fetching remains for when OAuth issues are resolved
+
             # Store in database
             with self.db.get_session() as session:
                 existing = session.query(HRVData).filter_by(
@@ -298,13 +546,21 @@ class GarminClient:
                     existing.hrv_score = hrv_score
                     existing.hrv_rmssd = hrv_rmssd
                     existing.hrv_status = hrv_status
+                    existing.resting_heart_rate = resting_hr
+                    existing.max_heart_rate = max_hr
+                    existing.min_heart_rate = min_hr
                     existing.raw_data = json.dumps({
                         'daily_rmssd': hrv_record.last_night_avg,  # Primary daily metric
                         'weekly_avg_rmssd': hrv_record.weekly_avg,  # Context only
                         'last_night_5_min_high': hrv_record.last_night_5_min_high,
                         'status': hrv_record.status,
                         'feedback_phrase': hrv_record.feedback_phrase,
-                        'note': 'hrv_score uses daily_rmssd for baseline analysis'
+                        'note': 'hrv_score uses daily_rmssd for baseline analysis',
+                        'heart_rate': {
+                            'resting': resting_hr,
+                            'max': max_hr,
+                            'min': min_hr
+                        }
                     })
                 else:
                     hrv_db_record = HRVData(
@@ -313,13 +569,21 @@ class GarminClient:
                         hrv_score=hrv_score,
                         hrv_rmssd=hrv_rmssd,
                         hrv_status=hrv_status,
+                        resting_heart_rate=resting_hr,
+                        max_heart_rate=max_hr,
+                        min_heart_rate=min_hr,
                         raw_data=json.dumps({
                             'daily_rmssd': hrv_record.last_night_avg,  # Primary daily metric
                             'weekly_avg_rmssd': hrv_record.weekly_avg,  # Context only
                             'last_night_5_min_high': hrv_record.last_night_5_min_high,
                             'status': hrv_record.status,
                             'feedback_phrase': hrv_record.feedback_phrase,
-                            'note': 'hrv_score uses daily_rmssd for baseline analysis'
+                            'note': 'hrv_score uses daily_rmssd for baseline analysis',
+                            'heart_rate': {
+                                'resting': resting_hr,
+                                'max': max_hr,
+                                'min': min_hr
+                            }
                         })
                     )
                     session.add(hrv_db_record)
@@ -334,15 +598,49 @@ class GarminClient:
     def _sync_sleep_for_date(self, date: datetime.date) -> bool:
         """Sync sleep data for a specific date."""
         try:
-            # Use garth built-in method for sleep data
-            sleep_records = garth.DailySleep.list()
-
-            # Find record for the specific date
+            # Multiple approaches to get historical sleep data
             sleep_record = None
-            for record in sleep_records:
-                if record.calendar_date == date:
-                    sleep_record = record
-                    break
+
+            # Method 1: Try with larger date range (sometimes needs more days)
+            try:
+                start_date = date - timedelta(days=2)  # 2 days before
+                sleep_records = garth.DailySleep.list(start_date, 5)  # 5 days range
+                for record in sleep_records:
+                    if hasattr(record, 'calendar_date') and record.calendar_date == date:
+                        sleep_record = record
+                        break
+            except Exception as e:
+                pass
+
+            # Method 2: Try specific date format approach
+            if not sleep_record:
+                try:
+                    # Some garth methods need specific date string format
+                    date_str = date.strftime('%Y-%m-%d')
+                    sleep_record = garth.DailySleep.get(date_str)
+                except Exception as e:
+                    pass
+
+            # Method 3: Try with different range parameters
+            if not sleep_record:
+                try:
+                    # Try getting sleep data for exact date with 1-day range
+                    sleep_records = garth.DailySleep.list(date, 1)
+                    if sleep_records:
+                        sleep_record = sleep_records[0] if len(sleep_records) > 0 else None
+                except Exception as e:
+                    pass
+
+            # Method 4: Original approach as final fallback
+            if not sleep_record:
+                try:
+                    all_sleep_records = garth.DailySleep.list()
+                    for record in all_sleep_records:
+                        if hasattr(record, 'calendar_date') and record.calendar_date == date:
+                            sleep_record = record
+                            break
+                except:
+                    pass
 
             if not sleep_record:
                 return False
@@ -391,23 +689,45 @@ class GarminClient:
     def _sync_wellness_for_date(self, date: datetime.date) -> bool:
         """Sync basic wellness data for a specific date."""
         try:
-            # Get stress data using garth built-in method
-            stress_records = garth.DailyStress.list()
-            steps_records = garth.DailySteps.list()
+            # Get stress and steps data using garth built-in method with date range
+            start_date = date - timedelta(days=1)  # Day before
+            stress_records = garth.DailyStress.list(start_date, 3)  # 3 days range
+            steps_records = garth.DailySteps.list(start_date, 3)  # 3 days range
+
+            # Heart rate data is now handled in HRV sync
 
             # Find records for the specific date
             stress_record = None
             steps_record = None
 
             for record in stress_records:
-                if record.calendar_date == date:
+                if hasattr(record, 'calendar_date') and record.calendar_date == date:
                     stress_record = record
                     break
 
             for record in steps_records:
-                if record.calendar_date == date:
+                if hasattr(record, 'calendar_date') and record.calendar_date == date:
                     steps_record = record
                     break
+
+            # Fallback to getting all records if date range didn't work
+            if not stress_record or not steps_record:
+                try:
+                    if not stress_record:
+                        all_stress_records = garth.DailyStress.list()
+                        for record in all_stress_records:
+                            if hasattr(record, 'calendar_date') and record.calendar_date == date:
+                                stress_record = record
+                                break
+
+                    if not steps_record:
+                        all_steps_records = garth.DailySteps.list()
+                        for record in all_steps_records:
+                            if hasattr(record, 'calendar_date') and record.calendar_date == date:
+                                steps_record = record
+                                break
+                except:
+                    pass
 
             stress_avg = stress_record.overall_stress_level if stress_record else None
             steps = steps_record.total_steps if steps_record else None

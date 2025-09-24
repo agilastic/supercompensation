@@ -51,6 +51,33 @@ class Database:
         finally:
             session.close()
 
+    def migrate_schema(self):
+        """Apply schema migrations for new columns."""
+        try:
+            # Check if resting_heart_rate column exists in hrv_data
+            result = self.engine.execute("PRAGMA table_info(hrv_data)")
+            columns = [row[1] for row in result]
+
+            # Add missing heart rate columns to hrv_data if they don't exist
+            if 'resting_heart_rate' not in columns:
+                self.engine.execute("ALTER TABLE hrv_data ADD COLUMN resting_heart_rate INTEGER")
+            if 'max_heart_rate' not in columns:
+                self.engine.execute("ALTER TABLE hrv_data ADD COLUMN max_heart_rate INTEGER")
+            if 'min_heart_rate' not in columns:
+                self.engine.execute("ALTER TABLE hrv_data ADD COLUMN min_heart_rate INTEGER")
+
+            # Remove heart rate columns from wellness_data if they exist (cleanup)
+            wellness_result = self.engine.execute("PRAGMA table_info(wellness_data)")
+            wellness_columns = [row[1] for row in wellness_result]
+
+            # SQLite doesn't support DROP COLUMN, so we note the cleanup needed
+            if any(col in wellness_columns for col in ['resting_heart_rate', 'max_heart_rate', 'min_heart_rate']):
+                print("Note: Heart rate columns found in wellness_data table - consider manual cleanup")
+
+        except Exception as e:
+            # Migration failed, but don't crash the app
+            print(f"Schema migration warning: {e}")
+
     def close(self):
         """Close database connection."""
         self.engine.dispose()
@@ -66,6 +93,7 @@ def get_db() -> Database:
     if _db is None:
         _db = Database()
         _db.create_tables()
+        _db.migrate_schema()  # Apply any schema migrations
     return _db
 
 

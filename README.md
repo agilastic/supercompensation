@@ -9,14 +9,18 @@ A comprehensive Python tool that analyzes your training data using advanced spor
 ### 📱 **Multi-Platform Data Integration**
 - **Strava Integration**: Automatic synchronization of activities via OAuth2
 - **Garmin Connect Integration**: HRV, sleep quality, stress levels, and wellness data
+- **RENPHO Body Composition**: Smart CSV auto-discovery with athletic analysis focused on power-to-weight ratios
+- **Omron Blood Pressure**: Health monitoring integration for cardiovascular tracking
 - **Multi-Sport Support**: Running, cycling, hiking, strength training, rowing, swimming, and more
 - **Environmental Integration**: Real weather data integration for training optimization
 
 ### 🧠 **Advanced Sports Science**
 - **Banister Impulse-Response Model**: Fitness-Fatigue modeling with supercompensation
 - **German Sports Science**: Multi-system recovery analysis (Neural, Energetic, Metabolic, Structural, Adaptive)
+- **Athletic Body Composition Analysis**: Power-to-weight optimization, hydration stability tracking, lean mass monitoring
 - **HRV Baseline Analysis**: Heart Rate Variability monitoring for recovery optimization
 - **Periodization State Tracking**: Real calendar-based training cycle management
+- **Overtraining Detection**: Advanced algorithms to prevent burnout and optimize supercompensation
 
 ### 🎯 **Olympic-Level Training Intelligence**
 - **Sport-Specific Recommendations**: Not just intensity, but specific activity suggestions
@@ -104,7 +108,10 @@ strava-super run
 This single command automatically:
 - 📱 Syncs 30 days of Strava activities
 - ⌚ Syncs 30 days of Garmin wellness data (HRV, sleep, stress)
-- 📊 Analyzes all training data
+- ⚖️ Auto-imports RENPHO body composition data from CSV files
+- 🩺 Imports Omron blood pressure measurements
+- 📊 Analyzes all training data with advanced models
+- 🚨 Detects overtraining risk and provides recovery recommendations
 - 🎯 Generates 30-day periodized training plan
 
 ![Complete Workflow](screenshots/complete-workflow.png)
@@ -162,7 +169,53 @@ strava-super multisport analyze --days 30
 strava-super multisport recovery --days 14
 ```
 
+### ⚖️ **RENPHO Body Composition Analysis**
+```bash
+# Auto-discover and import all RENPHO CSV files in current directory
+strava-super renpho import-csv
+
+# Import from specific directory
+strava-super renpho import-csv --directory ~/Downloads
+
+# Import specific CSV file
+strava-super renpho import-csv --csv-path "RENPHO Health-Export.csv"
+
+# Athletic performance trends analysis
+strava-super renpho trends --days 60
+
+# View enhanced training log with body composition data
+strava-super analyze --days 60
+```
+
+**RENPHO Features:**
+- **🔍 Smart CSV Auto-Discovery**: Automatically finds RENPHO CSV files by column structure
+- **🌍 Multi-Language Support**: German and English CSV formats supported
+- **🏃‍♂️ Athletic Focus**: Power-to-weight ratios, hydration stability, lean mass tracking
+- **📊 Training Log Integration**: Weight, body fat %, and hydration shown in 60-day log
+- **🎯 Performance Metrics**: Recovery scores, metabolic efficiency, training adaptation indicators
+
 ![Training Plan Example](screenshots/training-plan.png)
+
+## 📊 Enhanced Training Log
+
+The 60-day comprehensive training log now includes athletic body composition metrics:
+
+```
+                       60-Day Comprehensive Training Log
+╭────┬─────────────────┬──┬───┬────┬───┬──┬───┬─┬─────┬──┬───┬──────╮
+│ D… │ Activity        │ I│ L…│ Fi…│ F… │ H│ S…│ R│ Wei…│ B│ H…│ BP   │
+├────┼─────────────────┼──┼───┼────┼───┼──┼───┼─┼─────┼──┼───┼──────┤
+│ 09…│ Run - Afternoon │ 3│ 89│ 43…│28…│ 52│ 85│ 58│84.2│12│63.│134/…│
+│ 09…│ Ride - Morning  │ 2│145│ 44…│30…│ 48│ 87│ 62│84.5│12│63.│  —  │
+│ 09…│ Rest Day        │ 0│  0│ 44…│29…│ 54│ 89│ 61│84.7│12│63.│130/…│
+╰────┴─────────────────┴──┴───┴────┴───┴──┴───┴─┴─────┴──┴───┴──────╯
+```
+
+**Columns Explained:**
+- **Weight**: Daily body weight from RENPHO scale (kg)
+- **BF%**: Body fat percentage for power-to-weight analysis
+- **H2O**: Hydration percentage for recovery monitoring
+- **All metrics integrated** with training load, HRV, sleep, and wellness data
 
 ## Model Parameters
 
@@ -233,6 +286,14 @@ Based on German sports science (Belastungs-Beanspruchungs-Konzept):
 - **Recovery Recommendations**: HRV-guided training adjustments
 - **Sleep Quality Impact**: Sleep score integration with training readiness
 
+### **Athletic Body Composition Analysis**
+- **Power-to-Weight Optimization**: Lean body mass tracking for cycling and climbing performance
+- **Hydration Stability Monitoring**: 96.6/100 stability scores for recovery assessment
+- **Training Adaptation Tracking**: Muscle mass changes during training cycles
+- **Recovery Score Calculation**: Hydration and metabolic age integration for training readiness
+- **German CSV Format Support**: Automatic detection of RENPHO export formats
+- **Multi-File Processing**: Batch import of multiple CSV files with detailed reporting
+
 ![HRV Analysis](screenshots/hrv-analysis.png)
 
 ### **Multi-Sport Configuration**
@@ -266,14 +327,21 @@ RECOVERY_TIME_CYCLING=24
 ```
 strava_supercompensation/
 ├── auth/                    # OAuth2 and authentication management
-├── api/                     # Strava & Garmin API clients
-├── db/                      # Database models and management
+├── api/                     # Multi-device API clients
+│   ├── strava.py           # Strava OAuth2 integration
+│   ├── garmin.py           # Garmin Connect wellness data
+│   ├── renpho_csv.py       # RENPHO body composition analysis
+│   └── omron.py           # Omron blood pressure integration
+├── db/                     # Database models and management
+│   ├── models.py          # SQLAlchemy data models
+│   └── database.py        # Database management
 ├── analysis/
-│   ├── recommendations.py   # Main recommendation engine
+│   ├── recommendations.py   # Main recommendation engine with overtraining detection
 │   ├── multisystem_recovery.py  # German sports science model
 │   ├── hrv_baseline_analyzer.py # HRV analysis
 │   ├── environmental_factors.py # Weather integration
-│   └── periodization.py     # Training cycle management
+│   ├── periodization.py     # Training cycle management
+│   └── model_integration.py # Advanced model integration
 ├── cli.py                   # Rich command-line interface
 └── config.py               # Configuration management
 ```
@@ -283,7 +351,10 @@ strava_supercompensation/
 - **Metrics**: Daily fitness, fatigue, form calculations
 - **HRV Data**: Heart rate variability measurements
 - **Sleep Data**: Sleep quality and recovery metrics
+- **Body Composition**: RENPHO athletic analysis with power-to-weight calculations
+- **Blood Pressure**: Omron cardiovascular health tracking
 - **Periodization State**: Training cycle and phase tracking
+- **Wellness Data**: Integrated multi-device health monitoring
 
 ![Technical Architecture](screenshots/architecture.png)
 

@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from ..config import config
 from ..db import get_db
 from ..db.models import Activity, Metric
-from .sports_metrics import SportsMetricsCalculator, RecoveryMetrics
+from .multisport_metrics import SportsMetricsCalculator, RecoveryMetrics
 
 
 class PeriodizationType(Enum):

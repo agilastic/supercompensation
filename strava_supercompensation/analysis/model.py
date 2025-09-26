@@ -1,7 +1,8 @@
 """Banister Impulse-Response model implementation for supercompensation analysis."""
 
 import numpy as np
-from datetime import datetime, timedelta
+import logging
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Tuple, Optional
 import pandas as pd
 import json
@@ -55,6 +56,21 @@ class BanisterModel:
         Returns:
             Tuple of (fitness, fatigue, form) arrays
         """
+        # Physiological bounds based on sports science research (configurable)
+        MAX_DAILY_LOAD = config.MAX_DAILY_LOAD
+        MAX_FITNESS = config.MAX_FITNESS
+        MAX_FATIGUE = config.MAX_FATIGUE
+
+        # Check for extreme loads and warn
+        extreme_loads = training_loads > MAX_DAILY_LOAD
+        if np.any(extreme_loads):
+            extreme_count = np.sum(extreme_loads)
+            max_extreme = np.max(training_loads[extreme_loads])
+            logging.warning(f"Found {extreme_count} extreme training loads (max: {max_extreme:.1f}), capping at {MAX_DAILY_LOAD}")
+
+        # Cap training loads at physiologically reasonable values
+        training_loads = np.clip(training_loads, 0, MAX_DAILY_LOAD)
+
         n_days = len(days)
         fitness = np.zeros(n_days)
         fatigue = np.zeros(n_days)
@@ -64,7 +80,7 @@ class BanisterModel:
             fitness[0] = training_loads[0] * self.fitness_magnitude
             fatigue[0] = training_loads[0] * self.fatigue_magnitude
 
-        # Calculate cumulative impulse responses
+        # Calculate cumulative impulse responses with bounds checking
         for i in range(1, n_days):
             # Decay from previous day
             fitness[i] = fitness[i-1] * np.exp(-1 / self.fitness_decay)
@@ -75,8 +91,15 @@ class BanisterModel:
                 fitness[i] += training_loads[i] * self.fitness_magnitude
                 fatigue[i] += training_loads[i] * self.fatigue_magnitude
 
+            # Apply physiological bounds to prevent corruption
+            fitness[i] = min(fitness[i], MAX_FITNESS)
+            fatigue[i] = min(fatigue[i], MAX_FATIGUE)
+
         # Calculate form (Training Stress Balance)
         form = fitness - fatigue
+
+        # Cap form at physiologically reasonable bounds
+        form = np.clip(form, -config.MAX_FORM, config.MAX_FORM)
 
         return fitness, fatigue, form
 
@@ -209,7 +232,7 @@ class BanisterModel:
 
             # Update parameters
             params.total_adaptations += 1
-            params.last_adaptation = datetime.utcnow()
+            params.last_adaptation = datetime.now(timezone.utc)
             params.recent_performance_trend = performance_delta
 
             # Update confidence based on consistency
@@ -256,7 +279,7 @@ class SupercompensationAnalyzer:
             DataFrame with daily metrics
         """
         # Get activities from database
-        end_date = datetime.utcnow().date()
+        end_date = datetime.now(timezone.utc).date()
         start_date = end_date - timedelta(days=days_back)
 
         # Create daily training load series with dates (not datetimes)
@@ -352,7 +375,7 @@ class SupercompensationAnalyzer:
                     fatigue_magnitude=self.model.fatigue_magnitude,
                 )
                 session.add(state)
-            state.last_calculation = datetime.utcnow()
+            state.last_calculation = datetime.now(timezone.utc)
             session.commit()
 
     def get_current_state(self) -> Dict[str, float]:
@@ -371,7 +394,7 @@ class SupercompensationAnalyzer:
                 }
             else:
                 return {
-                    "date": datetime.utcnow(),
+                    "date": datetime.now(timezone.utc),
                     "fitness": 0.0,
                     "fatigue": 0.0,
                     "form": 0.0,
@@ -382,7 +405,7 @@ class SupercompensationAnalyzer:
     def get_metrics_history(self, days: int = 30) -> List[Dict]:
         """Get metrics history for visualization."""
         with self.db.get_session() as session:
-            cutoff_date = datetime.utcnow() - timedelta(days=days)
+            cutoff_date = datetime.now(timezone.utc) - timedelta(days=days)
             metrics = session.query(Metric).filter(
                 Metric.date >= cutoff_date
             ).order_by(Metric.date).all()

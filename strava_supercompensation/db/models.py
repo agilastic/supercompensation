@@ -1,6 +1,6 @@
 """Database models for Strava activities and metrics."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Boolean, Text, ForeignKey
 from sqlalchemy.ext.declarative import declarative_base
@@ -99,7 +99,7 @@ class AuthToken(Base):
 
     def is_expired(self) -> bool:
         """Check if the access token is expired."""
-        return datetime.utcnow().timestamp() >= self.expires_at
+        return datetime.now(timezone.utc).timestamp() >= self.expires_at
 
     def __repr__(self):
         return f"<AuthToken(user_id={self.user_id}, athlete_name={self.athlete_name})>"
@@ -343,7 +343,7 @@ class PeriodizationState(Base):
         """Get current day within the cycle (0-based)."""
         if not self.cycle_start_date:
             return 0
-        days_elapsed = (datetime.utcnow() - self.cycle_start_date).days
+        days_elapsed = (datetime.now(timezone.utc) - self.cycle_start_date).days
         cycle_length_days = self.cycle_length_weeks * 7
         return days_elapsed % cycle_length_days
 

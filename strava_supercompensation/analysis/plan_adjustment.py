@@ -14,8 +14,8 @@ from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass, field
 from enum import Enum
 
-from .advanced_planning import WorkoutPlan, WorkoutType, AdvancedPlanGenerator
-from .advanced_model import EnhancedFitnessFatigueModel, PerPotModel
+from .advanced_planning import WorkoutPlan, WorkoutType, TrainingPlanGenerator
+from .advanced_model import FitnessFatigueModel, PerPotModel
 from .multisystem_recovery import MultiSystemRecoveryModel
 from ..config import config
 from ..db import get_db
@@ -72,10 +72,10 @@ class PlanAdjustmentEngine:
         self.db = get_db()
 
         # Initialize models
-        self.ff_model = EnhancedFitnessFatigueModel(user_id=user_id)
+        self.ff_model = FitnessFatigueModel(user_id=user_id)
         self.perpot_model = PerPotModel(user_id=user_id)
         self.recovery_model = MultiSystemRecoveryModel()
-        self.plan_generator = AdvancedPlanGenerator(user_id=user_id)
+        self.plan_generator = TrainingPlanGenerator(user_id=user_id)
 
         # Adjustment thresholds
         self.overtraining_threshold = 0.7
@@ -551,7 +551,7 @@ class PlanAdjustmentEngine:
         t = np.arange(len(loads))
 
         # Recalculate fitness-fatigue
-        fitness, fatigue, performance = self.ff_model.impulse_response(loads, t)
+        fitness, fatigue, performance = self.ff_model.calculate_fitness_fatigue(loads, t)
 
         # Update workout predictions
         for i, workout in enumerate(plan):

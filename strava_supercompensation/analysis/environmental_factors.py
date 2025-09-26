@@ -19,6 +19,8 @@ from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 from enum import Enum
 
+from ..config import config
+
 class EnvironmentalCondition(Enum):
     """Environmental condition categories"""
     OPTIMAL = "optimal"           # Ideal training conditions
@@ -49,13 +51,13 @@ class EnvironmentalAnalyzer:
     """
 
     def __init__(self):
-        # Optimal training ranges (based on sport science research)
+        # Optimal training ranges (configurable via .env)
         self.optimal_ranges = {
-            'temperature': (10.0, 20.0),    # 10-20°C optimal for endurance
-            'humidity': (40.0, 60.0),       # 40-60% relative humidity
-            'altitude': (0.0, 1000.0),      # Sea level to 1000m
-            'air_quality': (0, 50),         # AQI 0-50 (Good)
-            'wind_speed': (0.0, 5.0)        # 0-5 m/s light breeze
+            'temperature': (config.OPTIMAL_TEMP_MIN, config.OPTIMAL_TEMP_MAX),
+            'humidity': (config.OPTIMAL_HUMIDITY_MIN, config.OPTIMAL_HUMIDITY_MAX),
+            'altitude': (0.0, config.ALTITUDE_THRESHOLD),
+            'air_quality': (0, 50),  # AQI standard (Good category)
+            'wind_speed': (0.0, config.OPTIMAL_WIND_MAX / 3.6)  # Convert km/h to m/s
         }
 
     def analyze_environmental_impact(self, conditions: EnvironmentalProfile,

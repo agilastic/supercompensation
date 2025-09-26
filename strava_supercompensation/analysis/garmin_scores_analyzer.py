@@ -4,20 +4,23 @@ This analyzer takes direct scores from Garmin devices (HRV score, sleep score, s
 and calculates a simple weighted readiness score without baseline analysis.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
 import numpy as np
 
 from ..db import get_db
 from ..db.models import HRVData, SleepData, WellnessData
+from ..config import config
 
 
 class GarminScoresAnalyzer:
     """Analyze Garmin device scores for training readiness assessment."""
 
-    def __init__(self, user_id: str = "default"):
+    def __init__(self, user_id: str = "default", baseline_days: int = 30):
         self.user_id = user_id
         self.db = get_db()
+        self.baseline_days = baseline_days
+        self._baseline_cache = {}
 
     def get_readiness_score(self, date: datetime = None) -> Dict[str, any]:
         """Calculate training readiness score based on wellness metrics.
@@ -29,7 +32,7 @@ class GarminScoresAnalyzer:
             Dictionary with readiness score and contributing factors
         """
         if date is None:
-            date = datetime.utcnow()
+            date = datetime.now(timezone.utc)
 
         # Get latest wellness data within 2 days of target date
         date_window_start = date - timedelta(days=1)
@@ -65,18 +68,24 @@ class GarminScoresAnalyzer:
 
         # HRV Score (direct from Garmin, 0-100)
         if hrv_data and hrv_data.hrv_score is not None:
+            # Get baseline for comparison
+            hrv_baseline = self._get_hrv_baseline(date)
+            deviation = self._calculate_hrv_deviation(hrv_data.hrv_rmssd, hrv_baseline)
+
             components['hrv'] = {
                 'score': hrv_data.hrv_score,
-                'weight': 0.35,
+                'weight': config.READINESS_WEIGHT_HRV,
                 'status': hrv_data.hrv_status or 'unknown',
-                'value': hrv_data.hrv_rmssd
+                'value': hrv_data.hrv_rmssd,
+                'baseline': hrv_baseline,
+                'deviation_percent': deviation
             }
 
         # Sleep Score (direct from Garmin, 0-100)
         if sleep_data and sleep_data.sleep_score is not None:
             components['sleep'] = {
                 'score': sleep_data.sleep_score,
-                'weight': 0.30,
+                'weight': config.READINESS_WEIGHT_SLEEP,
                 'duration_hours': sleep_data.total_sleep_time / 3600 if sleep_data.total_sleep_time else None,
                 'efficiency': sleep_data.sleep_efficiency
             }
@@ -86,27 +95,31 @@ class GarminScoresAnalyzer:
             stress_score = max(0, 100 - wellness_data.stress_avg)  # Invert stress to readiness
             components['stress'] = {
                 'score': stress_score,
-                'weight': 0.20,
+                'weight': config.READINESS_WEIGHT_STRESS,
                 'avg_stress': wellness_data.stress_avg,
                 'qualifier': wellness_data.stress_qualifier
             }
 
-        # Body Battery Score (use drained vs charged ratio)
-        if wellness_data and wellness_data.body_battery_charged and wellness_data.body_battery_drained:
-            if wellness_data.body_battery_drained > 0:
-                battery_ratio = wellness_data.body_battery_charged / wellness_data.body_battery_drained
-                # Convert ratio to 0-100 scale (optimal ratio around 1.0)
-                battery_score = min(100, max(0, 50 + (battery_ratio - 1.0) * 50))
-            else:
-                battery_score = 100  # No drain is perfect
+        # Body Battery Score (based on highest and lowest values)
+        if wellness_data and wellness_data.body_battery_highest is not None and wellness_data.body_battery_lowest is not None:
+            # Score based on morning level and daily recovery
+            morning_level = wellness_data.body_battery_highest  # Usually morning value
+            daily_range = wellness_data.body_battery_highest - wellness_data.body_battery_lowest
+
+            # Good morning level (80+) and reasonable daily usage (30-50 points)
+            morning_score = min(100, morning_level * 1.25)  # Scale 80 to 100
+            usage_score = 100 - min(70, max(0, daily_range - 30) * 2)  # Optimal range 30-50
+
+            battery_score = (morning_score * 0.7 + usage_score * 0.3)
 
             components['body_battery'] = {
                 'score': battery_score,
-                'weight': 0.15,
+                'weight': (1.0 - config.READINESS_WEIGHT_HRV - config.READINESS_WEIGHT_SLEEP - config.READINESS_WEIGHT_STRESS),
                 'charged': wellness_data.body_battery_charged,
                 'drained': wellness_data.body_battery_drained,
                 'highest': wellness_data.body_battery_highest,
-                'lowest': wellness_data.body_battery_lowest
+                'lowest': wellness_data.body_battery_lowest,
+                'daily_usage': daily_range
             }
 
         # Calculate weighted overall score if we have any components
@@ -124,6 +137,38 @@ class GarminScoresAnalyzer:
             'recommendations': self._generate_readiness_recommendations(overall_score, components)
         }
 
+    def _get_hrv_baseline(self, date: datetime) -> Optional[float]:
+        """Calculate HRV baseline from recent history."""
+        cache_key = f"hrv_{self.user_id}_{date.date()}"
+        if cache_key in self._baseline_cache:
+            return self._baseline_cache[cache_key]
+
+        start_date = date - timedelta(days=self.baseline_days)
+        end_date = date - timedelta(days=1)  # Exclude current day
+
+        with self.db.get_session() as session:
+            hrv_data = session.query(HRVData).filter(
+                HRVData.user_id == self.user_id,
+                HRVData.date >= start_date,
+                HRVData.date <= end_date,
+                HRVData.hrv_rmssd.isnot(None)
+            ).all()
+
+            if len(hrv_data) >= 7:  # Need at least a week of data
+                values = [d.hrv_rmssd for d in hrv_data]
+                baseline = np.mean(values)
+                self._baseline_cache[cache_key] = baseline
+                return baseline
+
+        return None
+
+    def _calculate_hrv_deviation(self, current_value: float, baseline: float) -> float:
+        """Calculate HRV deviation percentage from baseline."""
+        if baseline is None or baseline == 0:
+            return 0.0
+
+        return ((current_value - baseline) / baseline) * 100
+
     def get_recovery_status(self, days: int = 7) -> Dict[str, any]:
         """Assess recovery status over recent days.
 
@@ -133,7 +178,7 @@ class GarminScoresAnalyzer:
         Returns:
             Dictionary with recovery analysis
         """
-        end_date = datetime.utcnow()
+        end_date = datetime.now(timezone.utc)
         start_date = end_date - timedelta(days=days)
 
         with self.db.get_session() as session:
@@ -227,7 +272,7 @@ class GarminScoresAnalyzer:
         Returns:
             Dictionary with wellness insights
         """
-        end_date = datetime.utcnow()
+        end_date = datetime.now(timezone.utc)
         start_date = end_date - timedelta(days=days)
 
         insights = {

@@ -16,7 +16,7 @@ Author: Sport Medicine Professional & Olympic Trainer
 
 import math
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 from enum import Enum
@@ -77,7 +77,7 @@ class HRVBaselineAnalyzer:
             Comprehensive readiness analysis with German methodology
         """
         if date is None:
-            date = datetime.utcnow()
+            date = datetime.now(timezone.utc)
 
         with self.db.get_session() as session:
             # Get individual HRV baseline (rolling 30-day)

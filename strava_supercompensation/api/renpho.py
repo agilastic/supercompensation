@@ -288,7 +288,7 @@ class RenphoClient:
         record.metabolic_age = measurement_data.get('metabolic_age') or measurement_data.get('bodyage') or record.metabolic_age
         record.skeletal_muscle_percent = measurement_data.get('skeletal_muscle') or measurement_data.get('muscle') or record.skeletal_muscle_percent
         record.raw_data = json.dumps(measurement_data, default=str)
-        record.updated_at = datetime.utcnow()
+        record.updated_at = datetime.now(timezone.utc)
 
     def get_latest_measurement(self) -> Optional[BodyComposition]:
         """Get the most recent body composition measurement."""

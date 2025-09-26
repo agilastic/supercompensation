@@ -27,10 +27,21 @@ class Config:
     FITNESS_MAGNITUDE: float = float(os.getenv("FITNESS_MAGNITUDE", "0.1"))  # Reduced to prevent overflow
     FATIGUE_MAGNITUDE: float = float(os.getenv("FATIGUE_MAGNITUDE", "0.15"))  # Reduced to prevent overflow
 
+    # Physiological Bounds - prevent corrupted metrics (adjusted for serious cyclists)
+    MAX_DAILY_LOAD: float = float(os.getenv("MAX_DAILY_LOAD", "1000"))  # Max for ultra-endurance events
+    MAX_FITNESS: float = float(os.getenv("MAX_FITNESS", "400"))  # Elite athlete fitness levels
+    MAX_FATIGUE: float = float(os.getenv("MAX_FATIGUE", "150"))  # High fatigue tolerance
+    MAX_FORM: float = float(os.getenv("MAX_FORM", "100"))  # Extended form range
+
     # Training Recommendation Thresholds
     FATIGUE_HIGH_THRESHOLD: float = 0.5  # Fatigue/Fitness ratio above this = rest day
     FORM_HIGH_THRESHOLD: float = 5  # Form above this = hard training possible
     FORM_LOW_THRESHOLD: float = -5  # Form below this = easy only
+
+    # Training Plan Configuration
+    TRAINING_MAX_WEEKLY_HOURS: float = float(os.getenv("TRAINING_MAX_WEEKLY_HOURS", "14"))  # Maximum hours per week
+    TRAINING_REST_DAYS: str = os.getenv("TRAINING_REST_DAYS", "0")  # Comma-separated days (0=Mon, 6=Sun)
+    TRAINING_STRENGTH_DAYS: str = os.getenv("TRAINING_STRENGTH_DAYS", "1")  # Mandatory strength days (1=Tue)
 
     # Application
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
@@ -160,6 +171,34 @@ class Config:
         "Yoga": float(os.getenv("LOAD_MULTIPLIER_YOGA", "0.5")),
     }
 
+    # Duration Calculation Multipliers (TSS to minutes conversion)
+    DURATION_MULTIPLIERS = {
+        "REST": float(os.getenv("DURATION_MULTIPLIER_REST", "0.0")),
+        "RECOVERY": float(os.getenv("DURATION_MULTIPLIER_RECOVERY", "1.2")),
+        "AEROBIC": float(os.getenv("DURATION_MULTIPLIER_AEROBIC", "1.0")),
+        "TEMPO": float(os.getenv("DURATION_MULTIPLIER_TEMPO", "0.85")),
+        "THRESHOLD": float(os.getenv("DURATION_MULTIPLIER_THRESHOLD", "0.75")),
+        "VO2MAX": float(os.getenv("DURATION_MULTIPLIER_VO2MAX", "0.65")),
+        "NEUROMUSCULAR": float(os.getenv("DURATION_MULTIPLIER_NEUROMUSCULAR", "0.5")),
+        "LONG": float(os.getenv("DURATION_MULTIPLIER_LONG", "1.4")),
+        "INTERVALS": float(os.getenv("DURATION_MULTIPLIER_INTERVALS", "0.7")),
+        "FARTLEK": float(os.getenv("DURATION_MULTIPLIER_FARTLEK", "0.9")),
+    }
+
+    # Recovery Time Multipliers (for calculating recovery needs)
+    RECOVERY_MULTIPLIERS = {
+        "REST": float(os.getenv("RECOVERY_MULTIPLIER_REST", "0.0")),
+        "RECOVERY": float(os.getenv("RECOVERY_MULTIPLIER_RECOVERY", "0.5")),
+        "AEROBIC": float(os.getenv("RECOVERY_MULTIPLIER_AEROBIC", "1.0")),
+        "TEMPO": float(os.getenv("RECOVERY_MULTIPLIER_TEMPO", "1.2")),
+        "THRESHOLD": float(os.getenv("RECOVERY_MULTIPLIER_THRESHOLD", "1.5")),
+        "VO2MAX": float(os.getenv("RECOVERY_MULTIPLIER_VO2MAX", "2.0")),
+        "NEUROMUSCULAR": float(os.getenv("RECOVERY_MULTIPLIER_NEUROMUSCULAR", "2.5")),
+        "LONG": float(os.getenv("RECOVERY_MULTIPLIER_LONG", "1.3")),
+        "INTERVALS": float(os.getenv("RECOVERY_MULTIPLIER_INTERVALS", "1.8")),
+        "FARTLEK": float(os.getenv("RECOVERY_MULTIPLIER_FARTLEK", "1.0")),
+    }
+
     # Adaptive Model Parameters
     ENABLE_ADAPTIVE_PARAMETERS: bool = os.getenv("ENABLE_ADAPTIVE_PARAMETERS", "true").lower() == "true"
     ADAPTATION_RATE: float = float(os.getenv("ADAPTATION_RATE", "0.05"))
@@ -167,6 +206,20 @@ class Config:
     MAX_FITNESS_DECAY: float = float(os.getenv("MAX_FITNESS_DECAY", "60"))
     MIN_FATIGUE_DECAY: float = float(os.getenv("MIN_FATIGUE_DECAY", "3"))
     MAX_FATIGUE_DECAY: float = float(os.getenv("MAX_FATIGUE_DECAY", "14"))
+
+    # Overtraining and Readiness Parameters
+    OVERTRAINING_THRESHOLD: float = float(os.getenv("OVERTRAINING_THRESHOLD", "1.0"))
+    READINESS_WEIGHT_HRV: float = float(os.getenv("READINESS_WEIGHT_HRV", "0.4"))
+    READINESS_WEIGHT_SLEEP: float = float(os.getenv("READINESS_WEIGHT_SLEEP", "0.35"))
+    READINESS_WEIGHT_STRESS: float = float(os.getenv("READINESS_WEIGHT_STRESS", "0.25"))
+
+    # Environmental Optimal Ranges
+    OPTIMAL_TEMP_MIN: float = float(os.getenv("OPTIMAL_TEMP_MIN", "10"))
+    OPTIMAL_TEMP_MAX: float = float(os.getenv("OPTIMAL_TEMP_MAX", "20"))
+    OPTIMAL_HUMIDITY_MIN: float = float(os.getenv("OPTIMAL_HUMIDITY_MIN", "40"))
+    OPTIMAL_HUMIDITY_MAX: float = float(os.getenv("OPTIMAL_HUMIDITY_MAX", "60"))
+    OPTIMAL_WIND_MAX: float = float(os.getenv("OPTIMAL_WIND_MAX", "15"))
+    ALTITUDE_THRESHOLD: float = float(os.getenv("ALTITUDE_THRESHOLD", "1500"))
 
     @classmethod
     def get_enabled_sports(cls) -> list[str]:
@@ -361,6 +414,27 @@ class Config:
                     return True, days_since_race, recovery_duration, race_date
 
         return False, 0, 0, None
+
+    @classmethod
+    def get_training_rest_days(cls) -> list:
+        """Parse and return list of rest days for training plan.
+
+        Returns:
+            List of integers representing rest days (0=Monday, 6=Sunday)
+        """
+        if not cls.TRAINING_REST_DAYS:
+            return [0]  # Default to Monday rest day
+
+        rest_days = []
+        for day_str in cls.TRAINING_REST_DAYS.split(','):
+            try:
+                day = int(day_str.strip())
+                if 0 <= day <= 6:  # Valid day of week
+                    rest_days.append(day)
+            except ValueError:
+                continue
+
+        return rest_days if rest_days else [0]  # Default to Monday if parsing fails
 
 
 config = Config()

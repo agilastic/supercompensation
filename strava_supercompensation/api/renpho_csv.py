@@ -6,7 +6,7 @@ Focus on sports science metrics critical for performance optimization.
 import pandas as pd
 import os
 import glob
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 import json
 
@@ -140,7 +140,7 @@ class RenphoCsvImporter:
                                 safe_float(row['Gewicht(kg)'])
                             )
                             existing.raw_data = json.dumps(dict(row), default=str)
-                            existing.updated_at = datetime.utcnow()
+                            existing.updated_at = datetime.now(timezone.utc)
                             results["updated_measurements"] += 1
                         else:
                             # Create new record

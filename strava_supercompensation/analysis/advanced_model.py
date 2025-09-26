@@ -1,7 +1,7 @@
-"""Advanced training models based on Schäfer et al. 2015 and Herold & Sommer 2020.
+"""Training models based on Schäfer et al. 2015 and Herold & Sommer 2020.
 
 This module implements:
-1. Enhanced Fitness-Fatigue model with proper impulse-response dynamics
+1. Fitness-Fatigue model with proper impulse-response dynamics
 2. PerPot model for overtraining protection
 3. Optimal control problem formulation for training plan generation
 """
@@ -9,7 +9,7 @@ This module implements:
 import numpy as np
 from scipy import optimize
 from scipy.integrate import odeint
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Tuple, Optional, Union
 from dataclasses import dataclass
 from enum import Enum
@@ -47,8 +47,8 @@ class OptimalControlProblem:
             self.constraints = {}
 
 
-class EnhancedFitnessFatigueModel:
-    """Enhanced Fitness-Fatigue model with proper impulse-response dynamics.
+class FitnessFatigueModel:
+    """Fitness-Fatigue model with proper impulse-response dynamics.
 
     Based on Schäfer et al. 2015 and Herold & Sommer 2020.
     """
@@ -75,53 +75,69 @@ class EnhancedFitnessFatigueModel:
         self.p_star = p_star
         self.user_id = user_id
 
-    def impulse_response(
+    def calculate_fitness_fatigue(
         self,
         training_loads: np.ndarray,
-        t: np.ndarray
+        t: np.ndarray,
+        initial_fitness: float = 0.0,
+        initial_fatigue: float = 0.0
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Calculate fitness, fatigue, and performance using proper convolution.
+        """Calculate fitness, fatigue, and performance using Banister model.
+
+        FIXED: Now accepts initial fitness and fatigue state for continuous simulation.
 
         Implements the impulse-response model from the papers:
         g(n) = Σ w(t) * exp(-(n-t)/τ1)  for fitness
         h(n) = Σ w(t) * exp(-(n-t)/τ2)  for fatigue
-        p(n) = p* + k1*g(n) - k2*h(n)    for performance
+        p(n) = k1*g(n) - k2*h(n)         for form (TSB)
+
+        Args:
+            training_loads: Array of daily training loads (TSS)
+            t: Time array (days)
+            initial_fitness: Starting fitness level (CTL)
+            initial_fatigue: Starting fatigue level (ATL)
         """
         n_days = len(t)
         fitness = np.zeros(n_days)
         fatigue = np.zeros(n_days)
 
-        # Use identical approach to basic model: iterative decay + impulse
-        # Initialize with first day's load if present
-        if len(training_loads) > 0 and training_loads[0] > 0:
-            fitness[0] = training_loads[0] * self.k1
-            fatigue[0] = training_loads[0] * self.k2
+        # FIXED: Initialize with current state, then apply decay and add first day's load
+        if n_days > 0:
+            # Start day 0 with decayed initial state plus first day's training
+            fitness[0] = initial_fitness * np.exp(-1 / self.tau1)
+            fatigue[0] = initial_fatigue * np.exp(-1 / self.tau2)
 
-        # Calculate cumulative impulse responses (exactly like basic model)
+            # Add first day's training impulse
+            if len(training_loads) > 0 and training_loads[0] > 0:
+                fitness[0] += training_loads[0] * self.k1
+                fatigue[0] += training_loads[0] * self.k2
+
+        # Calculate cumulative impulse responses for subsequent days
         for i in range(1, n_days):
             # Decay from previous day
             fitness[i] = fitness[i-1] * np.exp(-1 / self.tau1)
             fatigue[i] = fatigue[i-1] * np.exp(-1 / self.tau2)
 
             # Add today's training impulse
-            if training_loads[i] > 0:
+            if i < len(training_loads) and training_loads[i] > 0:
                 fitness[i] += training_loads[i] * self.k1
                 fatigue[i] += training_loads[i] * self.k2
 
-        # Calculate form (Training Stress Balance) - exactly like basic model
+        # Calculate form (Training Stress Balance)
         performance = fitness - fatigue
 
         return fitness, fatigue, performance
 
-    def optimize_training_plan(
+    def generate_training_plan(
         self,
         problem: OptimalControlProblem,
         initial_fitness: float = 0.0,
         initial_fatigue: float = 0.0
     ) -> Dict[str, Union[np.ndarray, float]]:
-        """Optimize training plan using differential evolution.
+        """Generate training plan using differential evolution.
 
         Based on the optimization approach from Schäfer et al. 2015.
+        Uses initial fitness and fatigue states to start from current condition.
         """
         n_days = problem.duration_days
 
@@ -132,8 +148,13 @@ class EnhancedFitnessFatigueModel:
                 if day < n_days:
                     loads[day] = 0
 
+            # Start from initial state
             t = np.arange(n_days)
-            fitness, fatigue, performance = self.impulse_response(loads, t)
+            fitness_base, fatigue_base, _ = self.calculate_fitness_fatigue(loads, t)
+            # Add initial states
+            fitness = fitness_base + initial_fitness * np.exp(-t / self.tau1)
+            fatigue = fatigue_base + initial_fatigue * np.exp(-t / self.tau2)
+            performance = fitness - fatigue
 
             if problem.goal == TrainingGoal.MAXIMIZE_FTI:
                 # Force-Time Integral
@@ -175,15 +196,18 @@ class EnhancedFitnessFatigueModel:
         result = optimize.differential_evolution(
             objective,
             bounds,
-            maxiter=100,
-            popsize=15,
-            seed=42
+            maxiter=300,      # Increased from 100 to 300
+            popsize=20,       # Increased from 15 to 20
+            atol=1e-6,        # Absolute tolerance
+            tol=0.01,         # Relative tolerance
+            seed=42,
+            workers=1         # Sequential for debugging
         )
 
         # Calculate final metrics
         optimal_loads = result.x
         t = np.arange(n_days)
-        fitness, fatigue, performance = self.impulse_response(optimal_loads, t)
+        fitness, fatigue, performance = self.calculate_fitness_fatigue(optimal_loads, t)
 
         return {
             'loads': optimal_loads,
@@ -191,7 +215,8 @@ class EnhancedFitnessFatigueModel:
             'fatigue': fatigue,
             'performance': performance,
             'objective_value': -result.fun,
-            'success': result.success
+            'success': result.success,
+            'message': result.message if hasattr(result, 'message') else 'No message available'
         }
 
 
@@ -265,7 +290,7 @@ class PerPotModel:
             'strain_potential': sp,
             'response_potential': rp,
             'performance_potential': pp,
-            'overtraining_risk': sp > 1.0  # Boolean array indicating risk
+            'overtraining_risk': sp > config.OVERTRAINING_THRESHOLD  # Configurable threshold
         }
 
 
@@ -275,26 +300,48 @@ class OptimalControlSolver:
     Implements the multi-stage optimization approach from Herold & Sommer 2020.
     """
 
-    def __init__(self, model: EnhancedFitnessFatigueModel):
+    def __init__(self, model: FitnessFatigueModel):
         """Initialize solver with a model."""
         self.model = model
 
-    def solve_multistage_problem(
+    def solve_periodization_plan(
         self,
         total_duration: int,
-        n_stages: int,
-        contraction_stages: List[int],
-        rest_stages: List[int],
+        build_weeks: int,
+        recovery_weeks: int,
+        peak_weeks: int,
+        stage_durations: List[int] = None,
         min_load: float = 0.0,
         max_load: float = 100.0,
         objective: str = 'maximize_fti'
     ) -> Dict[str, np.ndarray]:
-        """Solve multi-stage optimal control problem.
+        """Create periodized training plan with flexible stage durations.
 
         Based on the formulation in Herold & Sommer 2020.
+        Allows custom stage durations instead of fixed equal stages.
         """
-        # Define stage durations (simplified - equal stages)
-        stage_duration = total_duration // n_stages
+        # Use provided stage durations or calculate based on periodization
+        if stage_durations is None:
+            # Default periodization: build->recovery->peak cycles
+            stage_durations = []
+            remaining = total_duration
+            cycle_length = build_weeks + recovery_weeks + peak_weeks
+
+            while remaining > 0:
+                if remaining >= cycle_length:
+                    stage_durations.extend([build_weeks, recovery_weeks, peak_weeks])
+                    remaining -= cycle_length
+                else:
+                    # Distribute remaining days
+                    if remaining >= build_weeks:
+                        stage_durations.append(build_weeks)
+                        remaining -= build_weeks
+                    if remaining > 0:
+                        stage_durations.append(remaining)
+                        remaining = 0
+
+        n_stages = len(stage_durations)
+        rest_stages = list(range(1, n_stages, 3))  # Every 3rd stage is recovery
 
         def stage_objective(x):
             """Objective for multi-stage problem."""
@@ -314,7 +361,7 @@ class OptimalControlSolver:
             full_loads = np.array(full_loads[:total_duration])
             t = np.arange(len(full_loads))
 
-            fitness, fatigue, performance = self.model.impulse_response(full_loads, t)
+            fitness, fatigue, performance = self.model.calculate_fitness_fatigue(full_loads, t)
 
             if objective == 'maximize_fti':
                 fti = np.sum(full_loads)
@@ -375,7 +422,7 @@ class OptimalControlSolver:
 
         full_loads = np.array(full_loads[:total_duration])
         t = np.arange(len(full_loads))
-        fitness, fatigue, performance = self.model.impulse_response(full_loads, t)
+        fitness, fatigue, performance = self.model.calculate_fitness_fatigue(full_loads, t)
 
         return {
             'stage_loads': optimal_loads,
@@ -418,16 +465,16 @@ class AdaptiveParameterLearning:
 
         def objective(params):
             """Objective function - minimize prediction error."""
-            if model_class == EnhancedFitnessFatigueModel:
+            if model_class == FitnessFatigueModel:
                 k1, k2, tau1, tau2, p_star = params
-                model = EnhancedFitnessFatigueModel(k1, k2, tau1, tau2, p_star)
+                model = FitnessFatigueModel(k1, k2, tau1, tau2, p_star)
             else:
                 return np.inf
 
             # Simulate with parameters
             loads = training_history['load'].values
             t = np.arange(len(loads))
-            _, _, predicted_performance = model.impulse_response(loads, t)
+            _, _, predicted_performance = model.calculate_fitness_fatigue(loads, t)
 
             # Calculate error on performance data dates
             error = 0
@@ -471,7 +518,7 @@ class AdaptiveParameterLearning:
             params_record.fatigue_magnitude = result.x[1]
             params_record.fitness_decay = result.x[2]
             params_record.fatigue_decay = result.x[3]
-            params_record.last_adaptation = datetime.utcnow()
+            params_record.last_adaptation = datetime.now(timezone.utc)
             params_record.total_adaptations += 1
 
             session.commit()
@@ -505,7 +552,7 @@ def generate_optimal_weekly_plan(
         Dictionary with daily loads and predicted outcomes
     """
     # Initialize model with personalized parameters if available
-    model = EnhancedFitnessFatigueModel()
+    model = FitnessFatigueModel()
 
     # Define optimization problem
     problem = OptimalControlProblem(
@@ -520,7 +567,7 @@ def generate_optimal_weekly_plan(
     )
 
     # Solve optimization problem
-    result = model.optimize_training_plan(
+    result = model.generate_training_plan(
         problem,
         initial_fitness=current_fitness,
         initial_fatigue=current_fatigue

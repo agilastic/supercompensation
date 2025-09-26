@@ -1,7 +1,7 @@
 """Strava API client implementation."""
 
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional
 import requests
 from requests.exceptions import RequestException
@@ -76,7 +76,7 @@ class StravaClient:
 
     def sync_activities(self, days_back: int = 30) -> int:
         """Sync activities from Strava to local database."""
-        after_date = datetime.utcnow() - timedelta(days=days_back)
+        after_date = datetime.now(timezone.utc) - timedelta(days=days_back)
         activities = []
         page = 1
 
@@ -192,14 +192,14 @@ class StravaClient:
             avg_hr = data["average_heartrate"]
             return metrics_calc.calculate_hrss(duration_minutes, avg_hr)
 
-        # Fallback: Basic estimation
-        duration_hours = (data.get("moving_time", 0) / 3600.0)
-        return duration_hours * 60  # Conservative estimate
+        # No fallback - require valid training load calculation
+        raise ValueError(f"Unable to calculate training load for activity {data.get('id', 'unknown')}: "
+                        f"Missing required data (suffer_score, sport_specific_metrics, or heart_rate)")
 
     def get_recent_activities(self, days: int = 7) -> List[Dict[str, Any]]:
         """Get recent activities from database."""
         with self.db.get_session() as session:
-            cutoff_date = datetime.utcnow() - timedelta(days=days)
+            cutoff_date = datetime.now(timezone.utc) - timedelta(days=days)
             activities = session.query(Activity).filter(
                 Activity.start_date >= cutoff_date
             ).order_by(Activity.start_date.desc()).all()

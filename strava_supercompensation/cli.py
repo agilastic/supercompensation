@@ -2,14 +2,14 @@
 
 import click
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
 from rich.progress import track
 from rich import box
 
-from .config import config
+from .config import config, Config
 from .auth import AuthManager
 from .api import StravaClient
 
@@ -28,7 +28,7 @@ except ImportError:
 from .analysis import SupercompensationAnalyzer
 from .analysis.multisport_metrics import MultiSportCalculator
 from .analysis.model_integration import get_integrated_analyzer
-from .analysis.advanced_planning import AdvancedPlanGenerator
+from .analysis.advanced_planning import TrainingPlanGenerator
 from .analysis.plan_adjustment import PlanAdjustmentEngine
 
 console = Console()
@@ -200,7 +200,7 @@ def analyze(days):
             table = Table(title="60-Day Comprehensive Training Log", box=box.ROUNDED)
             table.add_column("Date", style="cyan", width=6)
             table.add_column("Activity", width=30)
-            table.add_column("Int.", style="yellow", width=4)
+            table.add_column("Intensity", style="yellow", width=4)
             table.add_column("Load", style="magenta", width=5)
             table.add_column("Fitness", style="blue", width=6)
             table.add_column("Form", style="green", width=5)
@@ -456,6 +456,91 @@ def analyze(days):
 
             console.print("\n", table)
 
+            # Advanced insights analysis for 60-day comprehensive log
+            try:
+                with console.status("[cyan]Analyzing training patterns and risks...[/cyan]"):
+                    from .analysis.advanced_insights import AdvancedInsightsAnalyzer
+                    insights_analyzer = AdvancedInsightsAnalyzer()
+                    insights = insights_analyzer.analyze_comprehensive_insights(days_back=60)
+
+                    if insights:
+                        # Display contradictory signals
+                        contradictory_signals = insights.get('contradictory_signals', {})
+                        if contradictory_signals.get('status') == 'analyzed' and contradictory_signals.get('contradictions'):
+                            console.print("\n[bold red]⚠️ Contradictory Readiness & Overtraining Signals Detected[/bold red]")
+                            contradictions_table = Table(title="Signal Contradictions", box=box.ROUNDED)
+                            contradictions_table.add_column("Date", style="cyan")
+                            contradictions_table.add_column("Issue", style="red")
+                            contradictions_table.add_column("Details", style="yellow")
+
+                            for contradiction in contradictory_signals['contradictions'][:10]:  # Show top 10
+                                contradictions_table.add_row(
+                                    contradiction['date'].strftime('%m/%d'),
+                                    contradiction['type'],
+                                    contradiction['description']
+                                )
+                            console.print(contradictions_table)
+
+                        # Display health data anomalies
+                        health_anomalies = insights.get('health_anomalies', {})
+                        if health_anomalies.get('status') == 'analyzed' and health_anomalies.get('anomalies'):
+                            console.print("\n[bold yellow]📊 Health Data Anomalies Detected[/bold yellow]")
+                            anomalies_table = Table(title="Health Metric Outliers", box=box.ROUNDED)
+                            anomalies_table.add_column("Date", style="cyan")
+                            anomalies_table.add_column("Metric", style="blue")
+                            anomalies_table.add_column("Value", style="red")
+                            anomalies_table.add_column("Severity", style="yellow")
+
+                            for anomaly in health_anomalies['anomalies'][:10]:  # Show top 10
+                                anomalies_table.add_row(
+                                    anomaly['date'],
+                                    anomaly['metric'].replace('_', ' ').title(),
+                                    f"{anomaly['value']:.1f}",
+                                    anomaly['severity'].title()
+                                )
+                            console.print(anomalies_table)
+
+                        # Display sleep-training correlations
+                        sleep_risks = insights.get('sleep_training_risks', {})
+                        if sleep_risks.get('status') == 'analyzed':
+                            console.print(f"\n[bold blue]😴 Sleep-Training Analysis[/bold blue]")
+                            if sleep_risks.get('correlation_analysis'):
+                                corr = sleep_risks['correlation_analysis']
+                                console.print(f"   Sleep Impact Score: [cyan]{corr.get('impact_score', 'N/A')}/100[/cyan]")
+
+                            if sleep_risks.get('poor_recovery_patterns'):
+                                patterns = sleep_risks['poor_recovery_patterns']
+                                console.print(f"   Poor Recovery Days: [red]{len(patterns)}[/red]")
+
+                        # Display training imbalances
+                        imbalances = insights.get('training_imbalances', {})
+                        if imbalances.get('status') == 'analyzed' and imbalances.get('imbalances'):
+                            console.print(f"\n[bold red]💪 Training Imbalance Alert[/bold red]")
+                            for imbalance in imbalances['imbalances'][:3]:  # Show top 3
+                                console.print(f"   • {imbalance.get('description', 'Training imbalance detected')}")
+
+                        # Display injury risk patterns
+                        injury_risks = insights.get('injury_risk_patterns', {})
+                        if injury_risks.get('status') == 'analyzed' and injury_risks.get('risk_patterns'):
+                            risk_level = injury_risks.get('overall_risk', 'low')
+                            if risk_level in ['moderate', 'high', 'critical']:
+                                risk_colors = {'moderate': 'yellow', 'high': 'red', 'critical': 'bold red'}
+                                console.print(f"\n[{risk_colors[risk_level]}]🚨 Injury Risk: {risk_level.upper()}[/{risk_colors[risk_level]}]")
+                                for pattern in injury_risks['risk_patterns'][:3]:
+                                    console.print(f"   • {pattern.get('pattern', 'Risk pattern detected')}")
+
+                        # Summary recommendations
+                        if insights.get('critical_recommendations'):
+                            console.print(f"\n[bold green]📋 Key Recommendations[/bold green]")
+                            for i, rec in enumerate(insights['critical_recommendations'][:5], 1):
+                                console.print(f"   {i}. {rec}")
+
+                        console.print(f"\n[dim]🔍 Advanced analysis complete - {len(insights)} analysis modules processed[/dim]")
+
+            except ImportError:
+                console.print("\n[yellow]⚠️ Advanced insights analysis not available - missing dependencies[/yellow]")
+            except Exception as insights_error:
+                console.print(f"\n[red]❌ Advanced insights analysis failed: {insights_error}[/red]")
 
     except Exception as e:
         # Try automatic re-authentication for 401 errors
@@ -531,11 +616,11 @@ def recommend():
                 title = f"{days}-Day Training Plan"
                 table = Table(title=title, box=box.ROUNDED)
                 table.add_column("Day", style="cyan", width=3)
-                table.add_column("Date", width=8)
+                table.add_column("Date", width=10)
                 table.add_column("Week Type", style="bright_blue", width=10)
-                table.add_column("Intensity", style="yellow", width=8)
+                table.add_column("Intensity", style="yellow", width=15)
                 table.add_column("Activity", style="blue", width=24)
-                table.add_column("2nd Session", style="green", width=29)
+                table.add_column("2nd Session", style="green", width=27)
                 table.add_column("Load", style="magenta", width=4)
                 table.add_column("Form", style="cyan", width=6)
                 table.add_column("Fitness", style="green", width=7)
@@ -543,7 +628,7 @@ def recommend():
                 # For 30-day plan, add week separators
                 current_week = -1
                 for plan in training_plan:
-                    week_num = (plan['day'] - 1) // 7
+                    week_num = (plan['day'] - 1) // 7 if plan['day'] > 0 else 0
 
                     # Add week separator for 30-day plan
                     if days == 30 and week_num != current_week:
@@ -571,15 +656,43 @@ def recommend():
                             "TAPER 1": "magenta", "TAPER 2": "bright_magenta", "MAINTENANCE": "white"
                         }.get(week_type, "white")
 
+                        # Calculate weekly time totals for this week
+                        week_plans = [p for p in training_plan if (p['day'] - 1) // 7 == week_num]
+                        total_weekly_minutes = 0
+                        for plan in week_plans:
+                            # Extract duration from activity string (format: "Activity (60m)")
+                            activity = plan.get('activity', '')
+                            if '(' in activity and 'm)' in activity:
+                                try:
+                                    duration_str = activity.split('(')[-1].split('m)')[0]
+                                    total_weekly_minutes += int(duration_str)
+                                except:
+                                    pass
+
+                            # Add second activity duration
+                            second_activity = plan.get('second_activity', '')
+                            if second_activity and second_activity != '—' and '(' in second_activity and 'm)' in second_activity:
+                                try:
+                                    duration_str = second_activity.split('(')[-1].split('m)')[0]
+                                    total_weekly_minutes += int(duration_str)
+                                except:
+                                    pass
+
+                        weekly_hours = total_weekly_minutes / 60
+                        budget_hours = config.TRAINING_MAX_WEEKLY_HOURS
+                        time_status = "✅" if weekly_hours <= budget_hours else "⚠️"
+                        time_summary = f"{time_status} {weekly_hours:.1f}h/{budget_hours}h"
+
                         table.add_row(
                             f"[bold]W{week_num+1}[/bold]",
                             "[white]────────[/white]",
                             f"[{week_type_color}]{week_type}[/{week_type_color}]",
                             "[white]────────[/white]",
-                            "[white]────────────────────[/white]",
+                            f"[cyan]{time_summary}[/cyan]",
                             "[white]─────────────────────────[/white]",
                             "[white]────[/white]",
-                            "[white]──────[/white]"
+                            "[white]──────[/white]",
+                            "[white]───────[/white]"
                         )
 
                     # Color code recommendations
@@ -631,14 +744,57 @@ def recommend():
                     else:
                         second_session = "—"
 
-                    # Format date (shorter)
+                    # Format date to include day name: "We, 09/25"
                     date_str = plan['date']
                     if len(date_str) > 8:
                         date_str = date_str[5:]  # Remove year, keep MM-DD
 
+                    # Convert to day name and prepend to date
+                    day_names = ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su']
+
+                    day_name_prefix = ""
+
+                    # Try to get day name from date
+                    if 'date_obj' in plan and plan['date_obj']:
+                        try:
+                            day_name_prefix = day_names[plan['date_obj'].weekday()]
+                        except:
+                            pass
+                    elif 'date' in plan and plan['date']:
+                        # Parse date string
+                        try:
+                            # Handle different date formats
+                            if '/' in plan['date']:
+                                # MM/DD format - determine the year
+                                month, day = plan['date'].split('/')
+                                current_date = datetime.now()
+                                year = current_date.year
+
+                                # Create date object
+                                date_obj = datetime(year, int(month), int(day))
+
+                                # If the date is before today, it might be next year
+                                if date_obj < current_date and (current_date - date_obj).days > 30:
+                                    date_obj = datetime(year + 1, int(month), int(day))
+                            else:
+                                # Full date format YYYY-MM-DD
+                                date_obj = datetime.strptime(plan['date'], '%Y-%m-%d')
+
+                            # Get day name
+                            day_name_prefix = day_names[date_obj.weekday()]
+                        except Exception as e:
+                            # Keep empty prefix if parsing fails
+                            pass
+
+                    # Format as "Day, MM/DD" or just "MM/DD" if day parsing failed
+                    if day_name_prefix:
+                        formatted_date = f"{day_name_prefix}, {date_str}"
+                    else:
+                        formatted_date = date_str
+
                     table.add_row(
                         str(plan['day']),
-                        date_str,
+                        formatted_date,
                         f"[{week_type_color}]{week_type}[/{week_type_color}]",
                         f"[{rec_color}]{plan['recommendation']}[/{rec_color}]",
                         f"[blue]{activity}[/blue]",
@@ -1469,7 +1625,7 @@ def test_rhr(date):
 @cli.command()
 @click.option("--strava-days", default=60, help="Days of Strava data to sync")
 @click.option("--garmin-days", default=60, help="Days of Garmin data to sync")
-@click.option("--plan-days", default=30, help="Training plan length (7 or 30 days)")
+@click.option("--plan-days", default=30, help="Training plan length in days (1-365)", type=click.IntRange(1, 365))
 @click.option("--skip-strava", is_flag=True, help="Skip Strava sync")
 @click.option("--skip-garmin", is_flag=True, help="Skip Garmin sync")
 @click.option("--skip-analysis", is_flag=True, help="Skip analysis step")
@@ -1480,7 +1636,7 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
 
     # Step 1: Data Import & Sync
     console.print("")  # Spacing
-    console.print(Panel.fit("📊 Step 1: Importing Training Data", style="bold blue"))
+    console.print(Panel("📊 Step 1: Importing Training Data", box=box.HEAVY, style="bold blue"))
 
     # Collect sync status for summary panel
     sync_results = []
@@ -1640,7 +1796,7 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
 
     # Step 4: Advanced Physiological Analysis
     console.print("")  # Spacing
-    step4_header = Panel("🧬 Step 4: Advanced Physiological Analysis", box=box.HEAVY, style="bold blue")
+    step4_header = Panel("🧬 Step 4: Physiological Analysis", box=box.HEAVY, style="bold blue")
     console.print(step4_header)
 
     try:
@@ -1657,9 +1813,9 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
         model_status_table.add_column("Parameters", style="white")
 
         try:
-            from .analysis.advanced_model import EnhancedFitnessFatigueModel, PerPotModel
-            ff_model = EnhancedFitnessFatigueModel()
-            model_status_table.add_row("Enhanced FF", "✅ Active", f"k1={ff_model.k1:.3f}, τ1={ff_model.tau1}d")
+            from .analysis.advanced_model import FitnessFatigueModel, PerPotModel
+            ff_model = FitnessFatigueModel()
+            model_status_table.add_row("Fitness-Fatigue", "✅ Active", f"k1={ff_model.k1:.3f}, τ1={ff_model.tau1}d")
 
             perpot_model = PerPotModel()
             model_status_table.add_row("PerPot", "✅ Active", f"ds={perpot_model.ds:.1f}, dr={perpot_model.dr:.1f}")
@@ -1799,8 +1955,9 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
         # Get basic activity type distribution from database
         with analyzer.db.get_session() as session:
             from strava_supercompensation.db.models import Activity
+            from datetime import datetime, timedelta
             recent_activities = session.query(Activity).filter(
-                Activity.start_date >= datetime.utcnow() - timedelta(days=30)
+                Activity.start_date >= datetime.now(timezone.utc) - timedelta(days=30)
             ).all()
 
             if recent_activities:
@@ -1853,7 +2010,7 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
 
     # Step 6: Training Plan Generation & Recommendations
     console.print("")  # Spacing
-    step6_header = Panel("🎯 Step 6: Today's Recommendation & 30-Day Plan", box=box.HEAVY, style="bold blue")
+    step6_header = Panel(f"🎯 Step 6: Today's Recommendation & {plan_days}-Day Plan", box=box.HEAVY, style="bold blue")
     console.print(step6_header)
 
     try:
@@ -1891,80 +2048,69 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
             )
             console.print(recommendation_panel)
 
-        # Generate advanced training plan
-        console.print(f"\n[cyan]Generating {plan_days}-day plan using advanced models...[/cyan]")
+        # Generate training plan
+        console.print(f"\n[cyan]Generating {plan_days}-day plan using optimization models...[/cyan]")
 
-        if plan_days == 30:
-            # Use advanced 30-day planner
-            generator = AdvancedPlanGenerator("user")
-            plan_result = generator.generate_30_day_plan(
-                goal='balanced',
-                constraints={'max_weekly_hours': 12, 'rest_days': [6]}
-            )
+        # Use advanced planner for all durations (1-365 days) with configuration from .env
+        generator = TrainingPlanGenerator("user")
 
-            # Convert WorkoutPlan objects to dictionary format with simulated values
-            training_plan = []
-            if plan_result and 'daily_workouts' in plan_result:
-                daily_data = plan_result.get('visualizations', {}).get('daily_data', [])
-                for i, workout in enumerate(plan_result['daily_workouts']):
-                    # Get corresponding daily simulation data
-                    daily_sim = daily_data[i] if i < len(daily_data) else {}
+        plan_result = generator.generate_training_plan(
+            duration_days=plan_days,
+            goal='balanced',
+            constraints={
+                'max_weekly_hours': config.TRAINING_MAX_WEEKLY_HOURS,
+                'rest_days': config.get_training_rest_days()
+            }
+        )
 
-                    # Convert WorkoutPlan dataclass to dictionary with simulation data
-                    training_plan.append({
-                        'day': workout.day_number,
-                        'date': workout.date.strftime('%m/%d'),
-                        'recommendation': workout.intensity_level.upper(),
-                        'activity': workout.title,
-                        'second_activity': None,  # 30-day plans don't have second sessions
-                        'load': float(workout.planned_load),
-                        'suggested_load': float(workout.planned_load),
-                        'form': daily_sim.get('form', 0.0),
-                        'predicted_form': daily_sim.get('form', 0.0),
-                        'fitness': daily_sim.get('fitness', 0.0),
-                        'predicted_fitness': daily_sim.get('fitness', 0.0)
-                    })
-        else:
-            # Use integrated analyzer for shorter plans
-            plan_result = analyzer.generate_optimal_plan(
-                goal='balanced',
-                duration_days=plan_days,
-                rest_days=[6]
-            )
+        # Convert WorkoutPlan objects to dictionary format with simulated values
+        training_plan = []
+        if plan_result and 'daily_workouts' in plan_result:
+            daily_data = plan_result.get('visualizations', {}).get('daily_data', [])
+            # FIXED: Skip day 0 (today) and maintain correct data correlation
+            for i, workout in enumerate(plan_result['daily_workouts']):
+                if i == 0:  # Skip today (day 0)
+                    continue
+                # FIXED: Get corresponding daily simulation data with correct index
+                # Since we skipped day 0, we need to adjust the index
+                daily_sim = daily_data[i] if i < len(daily_data) else {}
 
-            if plan_result.get('success'):
-                # Convert to training plan format
-                training_plan = []
-                for i, (load, rec, detail) in enumerate(zip(
-                    plan_result['loads'],
-                    plan_result['recommendations'],
-                    plan_result['daily_details']
-                )):
-                    training_plan.append({
-                        'day': i + 1,
-                        'date': (datetime.now() + timedelta(days=i)).strftime('%m/%d'),
-                        'recommendation': rec.upper(),
-                        'activity': detail.get('activity', f'{rec.upper()} Training'),
-                        'load': float(load),
-                        'suggested_load': float(load),  # Add alias for compatibility
-                        'form': float(detail.get('predicted_form', 0)),
-                        'predicted_form': float(detail.get('predicted_form', 0)),  # Add expected field name
-                        'fitness': float(detail.get('predicted_fitness', 0)),
-                        'predicted_fitness': float(detail.get('predicted_fitness', 0))  # Add expected field name
-                    })
-            else:
-                training_plan = []
+                # FIXED: Use sequential day numbering and dates to prevent scrambling
+                sequential_day = len(training_plan) + 1  # Start from 1, increment sequentially
+                # Calculate date sequentially from plan start date (today + sequential_day)
+                from datetime import date, timedelta
+                plan_date = date.today() + timedelta(days=sequential_day)
 
+                # Convert WorkoutPlan dataclass to dictionary with simulation data
+                training_plan.append({
+                    'day': sequential_day,
+                    'date': plan_date.strftime('%m/%d'),
+                    'date_obj': plan_date,  # Keep the datetime object for day name conversion
+                    'recommendation': workout.intensity_level.upper(),
+                    'activity': f"{workout.primary_sport} Training ({workout.total_duration_min}m)" if workout.primary_sport != "Rest" else f"{workout.title} ({workout.total_duration_min}m)",
+                    'second_activity': (
+                        f"{workout.second_activity_title} ({workout.second_activity_duration}m)"
+                        if workout.second_activity_title else "—"
+                    ),
+                    'load': float(workout.planned_load),
+                    'suggested_load': float(workout.planned_load),
+                    'form': daily_sim.get('form', 0.0),
+                    'predicted_form': daily_sim.get('form', 0.0),
+                    'fitness': daily_sim.get('fitness', 0.0),
+                    'predicted_fitness': daily_sim.get('fitness', 0.0)
+                })
+
+        # Display the training plan if generated successfully
         if training_plan:
 
             title = f"{plan_days}-Day Training Plan"
             table = Table(title=title, box=box.ROUNDED)
             table.add_column("Day", style="cyan", width=3)
-            table.add_column("Date", width=8)
+            table.add_column("Date", width=10)
             table.add_column("Week Type", style="bright_blue", width=10)
-            table.add_column("Intensity", style="yellow", width=8)
-            table.add_column("Activity", style="blue", width=24)
-            table.add_column("2nd Session", style="green", width=26)
+            table.add_column("Intensity", style="yellow", width=11)
+            table.add_column("Primary Activity & Duration", style="blue", width=24)
+            table.add_column("2nd Session & Duration", style="green", width=26)
             table.add_column("Load", style="magenta", width=4)
             table.add_column("Form", style="cyan", width=6)
             table.add_column("Fitness", style="green", width=7)
@@ -1974,8 +2120,8 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
             for plan in training_plan:
                 week_num = (plan['day'] - 1) // 7
 
-                # Add week separator for 30-day plan
-                if plan_days == 30 and week_num != current_week:
+                # Add week separator for all plans (with weekly grouping for plans >= 7 days)
+                if plan_days >= 7 and week_num != current_week:
                     current_week = week_num
                     table.add_section()
 
@@ -2001,15 +2147,43 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
                         "TAPER 1": "magenta", "TAPER 2": "bright_magenta", "MAINTENANCE": "white"
                     }.get(week_type, "white")
 
+                    # Calculate weekly time totals for this week
+                    week_plans = [p for p in training_plan if (p['day'] - 1) // 7 == week_num]
+                    total_weekly_minutes = 0
+                    for plan in week_plans:
+                        # Extract duration from activity string (format: "Activity (60m)")
+                        activity = plan.get('activity', '')
+                        if '(' in activity and 'm)' in activity:
+                            try:
+                                duration_str = activity.split('(')[-1].split('m)')[0]
+                                total_weekly_minutes += int(duration_str)
+                            except:
+                                pass
+
+                        # Add second activity duration
+                        second_activity = plan.get('second_activity', '')
+                        if second_activity and second_activity != '—' and '(' in second_activity and 'm)' in second_activity:
+                            try:
+                                duration_str = second_activity.split('(')[-1].split('m)')[0]
+                                total_weekly_minutes += int(duration_str)
+                            except:
+                                pass
+
+                    weekly_hours = total_weekly_minutes / 60
+                    budget_hours = config.TRAINING_MAX_WEEKLY_HOURS
+                    time_status = "✅" if weekly_hours <= budget_hours else "⚠️"
+                    time_summary = f"{time_status} {weekly_hours:.1f}h/{budget_hours}h"
+
                     table.add_row(
                         f"[bold]W{week_num+1}[/bold]",
                         "[white]────────[/white]",
                         f"[{week_type_color}]{week_type}[/{week_type_color}]",
                         "[white]────────[/white]",
-                        "[white]────────────────────[/white]",
+                        f"[cyan]{time_summary}[/cyan]",
                         "[white]─────────────────────────[/white]",
                         "[white]────[/white]",
-                        "[white]──────[/white]"
+                        "[white]──────[/white]",
+                        "[white]───────[/white]"
                     )
 
                 # Color code recommendations
@@ -2061,14 +2235,43 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
                 else:
                     second_session = "—"
 
-                # Format date (shorter)
+                # Format date to include day name: "We, 09/25"
                 date_str = plan['date']
                 if len(date_str) > 8:
                     date_str = date_str[5:]  # Remove year, keep MM-DD
 
+                # Add day name to date
+                day_names = ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su']
+
+                formatted_date = date_str  # Default to just date
+
+                # Try to get day name from date
+                if 'date_obj' in plan and plan['date_obj']:
+                    try:
+                        day_name = day_names[plan['date_obj'].weekday()]
+                        formatted_date = f"{day_name}, {date_str}"
+                    except:
+                        pass
+                elif 'date' in plan and plan['date']:
+                    try:
+                        # Parse MM/DD format
+                        if '/' in plan['date']:
+                            month, day = plan['date'].split('/')
+                            current_year = datetime.now().year
+                            date_obj = datetime(current_year, int(month), int(day))
+
+                            # Adjust year if needed
+                            if date_obj < datetime.now() and (datetime.now() - date_obj).days > 30:
+                                date_obj = datetime(current_year + 1, int(month), int(day))
+
+                            day_name = day_names[date_obj.weekday()]
+                            formatted_date = f"{day_name}, {date_str}"
+                    except:
+                        pass
+
                 table.add_row(
                     str(plan['day']),
-                    date_str,
+                    formatted_date,
                     f"[{week_type_color}]{week_type}[/{week_type_color}]",
                     f"[{rec_color}]{plan['recommendation']}[/{rec_color}]",
                     f"[blue]{activity}[/blue]",
@@ -2228,80 +2431,315 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
         except Exception as e:
             console.print(f"[red]❌ Summary generation failed: {e}[/red]")
 
-        console.print(f"\n[cyan]🧬 Advanced models active • 📊 Multi-system analysis • 🎯 Optimal recommendations ready[/cyan]")
+        console.print(f"\n[cyan]🧬 Models active • 📊 Multi-system analysis • 🎯 Optimal recommendations ready[/cyan]")
+
+
+@cli.command()
+@click.option('--duration', default=30, help='Plan duration in days (1-365)', type=click.IntRange(1, 365))
+def show_training_plan(duration):
+    """Display the training plan."""
+    config = Config()
+
+    console.print(Panel.fit(f"📅 {duration}-Day Training Plan", style="bold green"))
+
+    try:
+        # Use configuration from .env
+        rest_days = config.get_training_rest_days()
+        max_weekly_hours = config.TRAINING_MAX_WEEKLY_HOURS
+
+        generator = TrainingPlanGenerator("user")
+
+        # Use generic training plan generation for any duration (1-365 days)
+        plan = generator.generate_training_plan(
+            duration_days=duration,
+            goal='balanced',
+            constraints={
+                'max_weekly_hours': max_weekly_hours,
+                'rest_days': rest_days
+            }
+        )
+
+        if plan and 'summary' in plan:
+            console.print(f"[green]✅ {duration}-day plan generated successfully[/green]")
+
+            # Extract plan details like the working code does
+            training_plan = []
+            if 'daily_workouts' in plan and plan['daily_workouts']:
+                daily_data = plan.get('visualizations', {}).get('daily_data', [])
+                # FIXED: Skip day 0 (today) and maintain correct data correlation
+                for i, workout in enumerate(plan['daily_workouts']):
+                    if i == 0:  # Skip today (day 0)
+                        continue
+                    # FIXED: Get corresponding daily simulation data with correct index
+                    # Since we skipped day 0, we need to adjust the index
+                    daily_sim = daily_data[i] if i < len(daily_data) else {}
+                    # Convert WorkoutPlan dataclass to dictionary with simulation data
+                    training_plan.append({
+                        'day': workout.day_number,
+                        'date': workout.date.strftime('%m/%d'),
+                        'date_obj': workout.date,  # Keep the datetime object for day name conversion
+                        'recommendation': workout.intensity_level.upper(),
+                        'activity': f"{workout.title} ({workout.total_duration_min}m)",
+                        'second_activity': (
+                            f"{workout.second_activity_title} ({workout.second_activity_duration}m)"
+                            if workout.second_activity_title else "—"
+                        ),
+                        'suggested_load': float(workout.planned_load),
+                        'form': daily_sim.get('form', 0.0),
+                        'predicted_form': daily_sim.get('form', 0.0),
+                        'fitness': daily_sim.get('fitness', 0.0),
+                        'predicted_fitness': daily_sim.get('fitness', 0.0)
+                    })
+            else:
+                training_plan = []
+
+            if training_plan:
+                title = f"{duration}-Day Training Plan"
+                table = Table(title=title, box=box.ROUNDED)
+                table.add_column("Day", style="cyan", width=3)
+                table.add_column("Date", width=10)
+                table.add_column("Week Type", style="bright_blue", width=10)
+                table.add_column("Intensity", style="yellow", width=11)
+                table.add_column("Primary Activity & Duration", style="blue", width=24)
+                table.add_column("2nd Activity & Duration", style="green", width=26)
+                table.add_column("Load", style="magenta", width=4)
+                table.add_column("Form", style="cyan", width=6)
+                table.add_column("Fitness", style="green", width=7)
+
+                # For 30-day plan, add week separators with horizontal lines
+                current_week = -1
+                added_week_separator = False
+
+                for i, plan_day in enumerate(training_plan):
+                    week_num = (plan_day['day'] - 1) // 7
+
+                    # Add week separator for new week
+                    if week_num != current_week:
+                        current_week = week_num
+
+                        # Add horizontal separator line if this is not the first week
+                        if week_num > 0:
+                            table.add_row(
+                                "[white]─[/white]",
+                                "[white]──────────[/white]",
+                                "[white]───────[/white]",
+                                "[white]───────────[/white]",
+                                "[white]─────────────────────────[/white]",
+                                "[white]──────────────────────────[/white]",
+                                "[white]────[/white]",
+                                "[white]──[/white]",
+                                "[white]────[/white]"
+                            )
+
+                        # Define week types based on sports science periodization
+                        week_types = {
+                            0: "BUILD 1", 1: "BUILD 2", 2: "BUILD 3", 3: "RECOVERY",  # Weeks 1-4
+                            4: "BUILD 1", 5: "BUILD 2", 6: "BUILD 3", 7: "RECOVERY",  # Weeks 5-8
+                            8: "BUILD 1", 9: "BUILD 2", 10: "BUILD 3", 11: "RECOVERY", # Weeks 9-12
+                            12: "PEAK 1", 13: "PEAK 2", 14: "TAPER 1", 15: "TAPER 2"   # Weeks 13-16
+                        }
+                        # For longer plans, extend the pattern
+                        if week_num not in week_types:
+                            cycle_week = week_num % 4
+                            if cycle_week < 3:
+                                week_types[week_num] = f"BUILD {cycle_week + 1}"
+                            else:
+                                week_types[week_num] = "RECOVERY"
+
+                        week_type = week_types.get(week_num, "MAINTENANCE")
+                        week_type_color = {
+                            "BUILD 1": "bright_green", "BUILD 2": "green", "BUILD 3": "yellow",
+                            "RECOVERY": "bright_cyan", "PEAK 1": "bright_red", "PEAK 2": "red",
+                            "TAPER 1": "magenta", "TAPER 2": "bright_magenta", "MAINTENANCE": "white"
+                        }.get(week_type, "white")
+
+                        # Calculate weekly time totals for this week
+                        week_plans = [p for p in training_plan if (p['day'] - 1) // 7 == week_num]
+                        total_weekly_minutes = 0
+                        for plan in week_plans:
+                            # Extract duration from activity string (format: "Activity (60m)")
+                            activity = plan.get('activity', '')
+                            if '(' in activity and 'm)' in activity:
+                                try:
+                                    duration_str = activity.split('(')[-1].split('m)')[0]
+                                    total_weekly_minutes += int(duration_str)
+                                except:
+                                    pass
+
+                            # Add second activity duration
+                            second_activity = plan.get('second_activity', '')
+                            if second_activity and second_activity != '—' and '(' in second_activity and 'm)' in second_activity:
+                                try:
+                                    duration_str = second_activity.split('(')[-1].split('m)')[0]
+                                    total_weekly_minutes += int(duration_str)
+                                except:
+                                    pass
+
+                        weekly_hours = total_weekly_minutes / 60
+                        budget_hours = config.TRAINING_MAX_WEEKLY_HOURS
+                        time_status = "✅" if weekly_hours <= budget_hours else ("⚠️" if weekly_hours <= budget_hours * 1.1 else "🚨")
+
+                        # Enhanced week summary with additional information
+                        hours_info = f"{weekly_hours:.1f}h planned"
+                        budget_info = f"Max: {budget_hours}h"
+                        percentage = (weekly_hours / budget_hours * 100) if budget_hours > 0 else 0
+                        utilization = f"({percentage:.0f}%)"
+
+                        week_summary = f"{time_status} {hours_info} | {budget_info} {utilization}"
+
+                        table.add_row(
+                            f"[bold bright_white]W{week_num+1}[/bold bright_white]",
+                            "[dim white]────────[/dim white]",
+                            f"[bold {week_type_color}]{week_type}[/bold {week_type_color}]",
+                            "[dim white]─────────[/dim white]",
+                            f"[bold cyan]{week_summary}[/bold cyan]",
+                            "[dim white]─────────────────────────[/dim white]",
+                            "[dim white]────[/dim white]",
+                            "[dim white]──────[/dim white]",
+                            "[dim white]───────[/dim white]"
+                        )
+
+                    # Color code recommendations
+                    rec_colors = {
+                        "REST": "red",
+                        "RECOVERY": "yellow",
+                        "EASY": "green",
+                        "MODERATE": "cyan",
+                        "HARD": "magenta",
+                        "PEAK": "bold magenta"
+                    }
+                    rec_color = rec_colors.get(plan_day['recommendation'], "white")
+
+                    # Get week type for this day
+                    week_types = {
+                        0: "BUILD 1", 1: "BUILD 2", 2: "BUILD 3", 3: "RECOVERY",
+                        4: "BUILD 1", 5: "BUILD 2", 6: "BUILD 3", 7: "RECOVERY",
+                        8: "BUILD 1", 9: "BUILD 2", 10: "BUILD 3", 11: "RECOVERY",
+                        12: "PEAK 1", 13: "PEAK 2", 14: "TAPER 1", 15: "TAPER 2"
+                    }
+                    if week_num not in week_types:
+                        cycle_week = week_num % 4
+                        if cycle_week < 3:
+                            week_types[week_num] = f"BUILD {cycle_week + 1}"
+                        else:
+                            week_types[week_num] = "RECOVERY"
+
+                    week_type = week_types.get(week_num, "MAINTENANCE")
+                    week_type_color = {
+                        "BUILD 1": "bright_green", "BUILD 2": "green", "BUILD 3": "yellow",
+                        "RECOVERY": "bright_cyan", "PEAK 1": "bright_red", "PEAK 2": "red",
+                        "TAPER 1": "magenta", "TAPER 2": "bright_magenta", "MAINTENANCE": "white"
+                    }.get(week_type, "white")
+
+                    # Get activity name
+                    activity = plan_day.get('activity', 'Unknown')
+                    if len(activity) > 24:
+                        activity = activity[:21] + "..."
+
+                    # Get second session info
+                    second_session = ""
+                    if plan_day.get('second_activity'):
+                        second_activity = plan_day['second_activity']
+                        if len(second_activity) > 29:
+                            second_session = second_activity[:26] + "..."
+                        else:
+                            second_session = second_activity
+                    else:
+                        second_session = "—"
+
+                    # Format date to include day name: "We, 09/25"
+                    date_str = plan_day['date']
+                    if len(date_str) > 8:
+                        date_str = date_str[5:]  # Remove year, keep MM-DD
+
+                    # Add day name to date
+                    day_names = ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su']
+                    formatted_date = date_str  # Default to just date
+
+                    # Try to get day name from date
+                    if 'date_obj' in plan_day and plan_day['date_obj']:
+                        try:
+                            day_name = day_names[plan_day['date_obj'].weekday()]
+                            formatted_date = f"{day_name}, {date_str}"
+                        except:
+                            pass
+
+                    table.add_row(
+                        str(plan_day['day']),
+                        formatted_date,
+                        f"[{week_type_color}]{week_type}[/{week_type_color}]",
+                        f"[{rec_color}]{plan_day['recommendation']}[/{rec_color}]",
+                        f"[blue]{activity}[/blue]",
+                        f"[green]{second_session}[/green]" if plan_day.get('second_activity') else f"[white]{second_session}[/white]",
+                        f"{plan_day['suggested_load']:.0f}",
+                        f"{plan_day['predicted_form']:.1f}",
+                        f"{plan_day.get('predicted_fitness', 0):.1f}",
+                    )
+
+                console.print(table)
+
+                # Show summary
+                total_load = sum(p.get('suggested_load', p.get('load', 0)) for p in training_plan)
+                rest_days = len([p for p in training_plan if p['recommendation'] == 'REST'])
+                hard_days = len([p for p in training_plan if p['recommendation'] in ['HARD', 'PEAK']])
+
+                console.print(Panel(f"Monthly Summary:\n"
+                                    f"• Total Load: {total_load:.0f} TSS\n"
+                                    f"• Average Daily Load: {total_load/len(training_plan):.0f} TSS\n"
+                                    f"• Rest Days: {rest_days}\n"
+                                    f"• Hard/Peak Days: {hard_days}\n"
+                                    f"• Periodization: 3:1 (3 weeks build, 1 week recovery)",
+                                    title="📊 Training Summary"))
+            else:
+                console.print("[yellow]⚠️ No training plan details available[/yellow]")
+        else:
+            console.print("[red]❌ Failed to generate training plan[/red]")
+
+    except Exception as e:
+        console.print(f"[red]❌ Error generating training plan: {e}[/red]")
 
 
 @cli.command()
 @click.option('--goal', default='balanced', help='Training goal: fitness, performance, recovery, balanced')
-@click.option('--duration', default=30, help='Plan duration in days (7-30)')
+@click.option('--duration', default=30, help='Plan duration in days (1-365)', type=click.IntRange(1, 365))
 @click.option('--max-hours', default=12, help='Maximum weekly training hours')
 @click.option('--rest-days', default='6', help='Rest days (0=Mon, 6=Sun, comma-separated)')
-def advanced_plan(goal, duration, max_hours, rest_days):
-    """Generate advanced training plan using scientific models."""
-    console.print(Panel.fit("🧬 Advanced Training Plan Generator", style="bold cyan"))
+def training_plan(goal, duration, max_hours, rest_days):
+    """Generate training plan using scientific models."""
+    console.print(Panel.fit("🧬 Training Plan Generator", style="bold cyan"))
 
     try:
         # Parse rest days
         rest_day_list = [int(x.strip()) for x in rest_days.split(',') if x.strip()]
 
-        if duration == 30:
-            # Use 30-day advanced planner
-            generator = AdvancedPlanGenerator("user")
-            plan = generator.generate_30_day_plan(
-                goal=goal,
-                constraints={
-                    'max_weekly_hours': max_hours,
-                    'rest_days': rest_day_list
-                }
-            )
+        # Use enhanced training planner for all durations (1-365 days)
+        generator = TrainingPlanGenerator("user")
 
-            if plan and 'summary' in plan:
-                console.print(f"[green]✅ 30-day plan generated successfully[/green]")
+        plan = generator.generate_training_plan(
+            duration_days=duration,
+            goal=goal,
+            constraints={
+                'max_weekly_hours': max_hours,
+                'rest_days': rest_day_list
+            }
+        )
 
-                # Show summary
-                summary = plan['summary']
-                console.print(Panel(
-                    f"Total Load: {summary['total_load']:.0f} TSS\n"
-                    f"Duration: {summary['total_duration_hours']:.1f} hours\n"
-                    f"Fitness Gain: +{summary['fitness_gain']:.1f}\n"
-                    f"Hard Days: {summary['hard_days']}\n"
-                    f"Rest Days: {summary['rest_days']}",
-                    title="📊 Plan Summary", style="green"
-                ))
+        if plan and 'summary' in plan:
+            console.print(f"[green]✅ {duration}-day plan generated successfully[/green]")
 
-            else:
-                console.print("[red]❌ Plan generation failed[/red]")
+            # Show summary
+            summary = plan['summary']
+            console.print(Panel(
+                f"Total Load: {summary['total_load']:.0f} TSS\n"
+                f"Duration: {summary['total_duration_hours']:.1f} hours\n"
+                f"Fitness Gain: +{summary['fitness_gain']:.1f}\n"
+                f"Hard Days: {summary['hard_days']}\n"
+                f"Rest Days: {summary['rest_days']}",
+                title="📊 Plan Summary", style="green"
+            ))
 
         else:
-            # Use integrated analyzer for shorter plans
-            analyzer = get_integrated_analyzer("user")
-            plan = analyzer.generate_optimal_plan(
-                goal=goal,
-                duration_days=duration,
-                rest_days=rest_day_list
-            )
-
-            if plan['success']:
-                console.print(f"[green]✅ {duration}-day plan generated[/green]")
-
-                # Show daily plan
-                table = Table(title=f"{duration}-Day Advanced Plan")
-                table.add_column("Day", style="cyan")
-                table.add_column("Recommendation", style="yellow")
-                table.add_column("Load", style="magenta")
-                table.add_column("Form", style="green")
-
-                for i, detail in enumerate(plan['daily_details']):
-                    table.add_row(
-                        f"Day {i+1}",
-                        detail['recommendation'],
-                        f"{detail['load']:.0f}",
-                        f"{detail['predicted_form']:.1f}"
-                    )
-
-                console.print(table)
-            else:
-                console.print("[red]❌ Plan generation failed[/red]")
+            console.print("[red]❌ Plan generation failed[/red]")
 
     except Exception as e:
         console.print(f"[red]❌ Error: {e}[/red]")
@@ -2318,7 +2756,7 @@ def adjust_plan(recovery_score, hrv_status, sleep_score, stress_level):
 
     try:
         # Load current plan (simplified - in real use would load from storage)
-        generator = AdvancedPlanGenerator("user")
+        generator = TrainingPlanGenerator("user")
         base_plan = generator.generate_30_day_plan(goal='balanced')
 
         if not base_plan or 'daily_workouts' not in base_plan:
@@ -2393,9 +2831,9 @@ def model_status(verbose):
 
         # Test FF model
         try:
-            from .analysis.advanced_model import EnhancedFitnessFatigueModel
-            ff_model = EnhancedFitnessFatigueModel()
-            console.print("[green]✅ Enhanced Fitness-Fatigue Model[/green]")
+            from .analysis.advanced_model import FitnessFatigueModel
+            ff_model = FitnessFatigueModel()
+            console.print("[green]✅ Fitness-Fatigue Model[/green]")
         except Exception as e:
             console.print(f"[red]❌ Fitness-Fatigue Model: {e}[/red]")
 
@@ -2416,8 +2854,8 @@ def model_status(verbose):
 
         # Test Plan Generation
         try:
-            generator = AdvancedPlanGenerator("test")
-            console.print("[green]✅ Advanced Plan Generator[/green]")
+            generator = TrainingPlanGenerator("test")
+            console.print("[green]✅ Training Plan Generator[/green]")
         except Exception as e:
             console.print(f"[red]❌ Plan Generator: {e}[/red]")
 
@@ -2432,8 +2870,8 @@ def model_status(verbose):
             # Show detailed model parameters
             console.print("\n[cyan]Model Parameters:[/cyan]")
             try:
-                from .analysis.advanced_model import EnhancedFitnessFatigueModel
-                ff_model = EnhancedFitnessFatigueModel()
+                from .analysis.advanced_model import FitnessFatigueModel
+                ff_model = FitnessFatigueModel()
                 console.print(f"  FF Model: k1={ff_model.k1:.3f}, k2={ff_model.k2:.3f}, τ1={ff_model.tau1}d, τ2={ff_model.tau2}d")
 
                 from .analysis.advanced_model import PerPotModel
@@ -2560,15 +2998,15 @@ def predict(days_ahead, target_load, show_optimal):
         console.print(f"Target Load: {target_load} TSS/day")
 
         # Use FF model for prediction
-        from .analysis.advanced_model import EnhancedFitnessFatigueModel
-        ff_model = EnhancedFitnessFatigueModel()
+        from .analysis.advanced_model import FitnessFatigueModel
+        ff_model = FitnessFatigueModel()
 
         # Create load schedule
         loads = [target_load] * days_ahead
         days = np.arange(days_ahead)
 
         # Predict using current state as baseline
-        fitness, fatigue, performance = ff_model.impulse_response(
+        fitness, fatigue, performance = ff_model.calculate_fitness_fatigue(
             np.array(loads),
             days
         )
@@ -2638,6 +3076,48 @@ def predict(days_ahead, target_load, show_optimal):
 
     except Exception as e:
         console.print(f"[red]❌ Prediction failed: {e}[/red]")
+
+
+@cli.command()
+@click.option('--confirm', is_flag=True, help='Skip confirmation prompt')
+def clean_metrics(confirm):
+    """Clean corrupted metrics data and ensure realistic physiological state."""
+    console.print(Panel.fit("🧹 Clean Corrupted Metrics Data", style="bold yellow"))
+
+    if not confirm:
+        console.print("[yellow]This will delete all calculated fitness/fatigue metrics.[/yellow]")
+        console.print("[yellow]Your activity data will be preserved.[/yellow]")
+        console.print("[yellow]Metrics will be recalculated from clean state on next analysis.[/yellow]")
+
+        if not click.confirm("Continue with metrics cleanup?"):
+            console.print("[cyan]Operation cancelled.[/cyan]")
+            return
+
+    try:
+        from .db import get_db
+        from .db.models import Metric
+
+        db = get_db()
+
+        with db.get_session() as session:
+            # Get count of metrics to be deleted
+            metrics_count = session.query(Metric).count()
+
+            if metrics_count > 0:
+                console.print(f"[yellow]Found {metrics_count} metrics records to clean...[/yellow]")
+
+                # Delete all metrics
+                session.query(Metric).delete()
+                session.commit()
+
+                console.print(f"[green]✅ Successfully deleted {metrics_count} corrupted metrics records[/green]")
+                console.print("[cyan]📊 Metrics will be recalculated from clean state on next analysis[/cyan]")
+                console.print("[cyan]💡 Run 'strava-super analyze' to rebuild metrics with realistic values[/cyan]")
+            else:
+                console.print("[green]✅ Metrics table is already clean[/green]")
+
+    except Exception as e:
+        console.print(f"[red]❌ Error cleaning metrics: {e}[/red]")
 
 
 def main():

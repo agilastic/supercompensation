@@ -5,11 +5,11 @@ This module bridges the advanced models with the existing recommendation engine.
 
 import numpy as np
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
 
 from .advanced_model import (
-    EnhancedFitnessFatigueModel,
+    FitnessFatigueModel,
     PerPotModel,
     OptimalControlSolver,
     OptimalControlProblem,
@@ -33,7 +33,7 @@ class IntegratedTrainingAnalyzer:
         self.db = get_db()
 
         # Initialize models
-        self.ff_model = EnhancedFitnessFatigueModel(user_id=user_id)
+        self.ff_model = FitnessFatigueModel(user_id=user_id)
         self.perpot_model = PerPotModel(user_id=user_id, max_daily_load=250.0)  # Set realistic max daily TSS
         self.recovery_model = MultiSystemRecoveryModel()
         self.adaptive_learner = AdaptiveParameterLearning(user_id=user_id)
@@ -131,7 +131,7 @@ class IntegratedTrainingAnalyzer:
     def _get_training_history(self, days_back: int) -> pd.DataFrame:
         # DEPRECATED: Now using SupercompensationAnalyzer data pipeline for consistency
         """Get training history from database."""
-        end_date = datetime.utcnow().date()
+        end_date = datetime.now(timezone.utc).date()
         start_date = end_date - timedelta(days=days_back)
 
         with self.db.get_session() as session:
@@ -494,7 +494,7 @@ class IntegratedTrainingAnalyzer:
         optimized = self.adaptive_learner.adapt_with_differential_evolution(
             training_history=training_data,
             performance_data=performance_data,
-            model_class=EnhancedFitnessFatigueModel
+            model_class=FitnessFatigueModel
         )
 
         # Update model with optimized parameters

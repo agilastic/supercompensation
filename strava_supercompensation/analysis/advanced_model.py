@@ -111,10 +111,10 @@ class FitnessFatigueModel:
             fitness[0] = initial_fitness * decay_fitness
             fatigue[0] = initial_fatigue * decay_fatigue
 
-            # Add first day's training impulse WITH PROPER SCALING
+            # Add first day's training impulse - STANDARD CTL/ATL CALCULATION
             if len(training_loads) > 0 and training_loads[0] > 0:
-                fitness[0] += training_loads[0] * (1 - decay_fitness) * self.k1
-                fatigue[0] += training_loads[0] * (1 - decay_fatigue) * self.k2
+                fitness[0] += training_loads[0] * (1 - decay_fitness)
+                fatigue[0] += training_loads[0] * (1 - decay_fatigue)
 
         # Calculate cumulative impulse responses for subsequent days
         for i in range(1, n_days):
@@ -127,14 +127,15 @@ class FitnessFatigueModel:
             fitness[i] = fitness[i-1] * decay_fitness
             fatigue[i] = fatigue[i-1] * decay_fatigue
 
-            # Add today's training impulse WITH PROPER SCALING
+            # Add today's training impulse - STANDARD CTL/ATL CALCULATION
             if i < len(training_loads) and training_loads[i] > 0:
-                # Standard CTL/ATL uses (1 - decay) as the scaling factor
-                fitness[i] += training_loads[i] * (1 - decay_fitness) * self.k1
-                fatigue[i] += training_loads[i] * (1 - decay_fatigue) * self.k2
+                # Standard CTL/ATL uses (1 - decay) as the scaling factor (NO k1/k2 scaling)
+                fitness[i] += training_loads[i] * (1 - decay_fitness)
+                fatigue[i] += training_loads[i] * (1 - decay_fatigue)
 
-        # Calculate form (Training Stress Balance)
-        performance = fitness - fatigue
+        # Calculate performance using Banister model: p(n) = k1*CTL - k2*ATL
+        # Note: fitness = CTL, fatigue = ATL in standard notation
+        performance = self.k1 * fitness - self.k2 * fatigue
 
         return fitness, fatigue, performance
 

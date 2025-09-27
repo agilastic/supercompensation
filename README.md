@@ -15,24 +15,28 @@ A comprehensive Python tool that analyzes your training data using advanced spor
 - **Environmental Integration**: Real weather data integration for training optimization
 
 ### 🧠 **Advanced Sports Science**
-- **Banister Impulse-Response Model**: Fitness-Fatigue modeling with supercompensation
+- **Industry-Standard CTL/ATL Calculations**: Compatible with TrainingPeaks, Garmin Connect, and Strava metrics
+- **Banister Impulse-Response Model**: Scientifically validated Fitness-Fatigue modeling with supercompensation
 - **German Sports Science**: Multi-system recovery analysis (Neural, Energetic, Metabolic, Structural, Adaptive)
 - **Athletic Body Composition Analysis**: Power-to-weight optimization, hydration stability tracking, lean mass monitoring
 - **HRV Baseline Analysis**: Heart Rate Variability monitoring for recovery optimization
-- **Periodization State Tracking**: Real calendar-based training cycle management
-- **Overtraining Detection**: Advanced algorithms to prevent burnout and optimize supercompensation
+- **Advanced Periodization**: PEAK and TAPER phases with sport-science compliant volume reduction
+- **Overtraining Detection**: PerPot model with non-functional overreaching detection
 
 ### 🎯 **Olympic-Level Training Intelligence**
 - **Sport-Specific Recommendations**: Not just intensity, but specific activity suggestions
+- **Mandatory Strength Training**: Configurable strength days with automatic WeightTraining enforcement
 - **Double Session Training**: Smart combinations based on Olympic training methodology
-- **30-Day Periodized Plans**: Complete training cycles with BUILD/PEAK/RECOVERY phases
+- **104-Day Periodized Plans**: Complete macrocycles with BUILD/RECOVERY/PEAK/TAPER phases
+- **Phase-Specific Training Logic**: PEAK (50-60% volume), TAPER (30-40% volume) with race-pace touches
 - **Environmental Adaptation**: Weather-aware training adjustments
 
 ### 💻 **Professional Interface**
-- **Rich CLI Interface**: Beautiful terminal interface with progress tracking
+- **Rich CLI Interface**: Beautiful terminal interface with progress tracking and full workout title display
 - **Complete Workflow Automation**: Single command for full analysis pipeline
-- **Real-Time Metrics**: Live fitness, fatigue, and form tracking
-- **Comprehensive Reporting**: Detailed training summaries and insights
+- **Real-Time Metrics**: Live fitness, fatigue, and form tracking with industry-standard values
+- **Comprehensive Reporting**: Detailed training summaries with phase-specific insights
+- **Configurable Training Schedule**: Set rest days and mandatory strength training days via .env
 
 ## Installation
 
@@ -93,6 +97,22 @@ To get these credentials:
 2. Create a new application
 3. Copy the Client ID and Client Secret
 
+### Training Schedule Configuration
+
+Configure your training schedule in `.env`:
+
+```bash
+# Rest days (0=Monday, 6=Sunday, comma-separated)
+TRAINING_REST_DAYS=0                    # Monday rest
+# TRAINING_REST_DAYS=0,6               # Monday and Sunday rest
+
+# Mandatory strength training days (1=Tuesday, comma-separated)
+TRAINING_STRENGTH_DAYS=1               # Tuesday strength
+# TRAINING_STRENGTH_DAYS=1,4           # Tuesday and Friday strength
+```
+
+**Weekday Numbers**: Monday=0, Tuesday=1, Wednesday=2, Thursday=3, Friday=4, Saturday=5, Sunday=6
+
 ## 🚀 Quick Start
 
 ### 1. Authentication
@@ -125,6 +145,9 @@ strava-super run
 
 # Custom timeframes
 strava-super run --strava-days 7 --garmin-days 30 --plan-days 7
+
+# Generate longer training plans with full periodization
+strava-super show-training-plan --duration 104  # 104-day macrocycle
 
 # Skip specific data sources
 strava-super run --skip-garmin  # Only Strava data
@@ -219,12 +242,14 @@ The 60-day comprehensive training log now includes athletic body composition met
 
 ## Model Parameters
 
-The tool uses the Banister model with the following default parameters (configurable in `.env`):
+The tool uses industry-standard CTL/ATL calculations compatible with TrainingPeaks and Garmin Connect:
 
-- **Fitness Decay Rate**: 42 days (Chronic Training Load time constant)
-- **Fatigue Decay Rate**: 7 days (Acute Training Load time constant)
-- **Fitness Magnitude**: 1.0
-- **Fatigue Magnitude**: 2.0
+- **Fitness Decay Rate (τ1)**: 42 days (Chronic Training Load time constant)
+- **Fatigue Decay Rate (τ2)**: 7 days (Acute Training Load time constant)
+- **Fitness Magnitude**: 1.0 (Standard CTL calculation)
+- **Fatigue Magnitude**: 1.0 (Standard ATL calculation)
+
+**Recent Fix**: Updated to use the scientifically validated formula: `CTL = CTL_yesterday × exp(-1/42) + TSS_today × (1 - exp(-1/42))` ensuring compatibility with all major training platforms.
 
 ## 🎯 Training Recommendations
 
@@ -255,11 +280,13 @@ Olympic-level training with smart session combinations:
 - **MODERATE + Recovery**: Tempo session + easy recovery activity
 - **PEAK + Mobility**: High-intensity workout + mobility/yoga
 
-### **Periodization Intelligence**
-- **BUILD Phase**: Progressive loading weeks (3 weeks)
-- **PEAK Phase**: High-intensity training block
-- **RECOVERY Phase**: Supercompensation week (1 week)
+### **Advanced Periodization Intelligence**
+- **BUILD Phase**: Progressive loading weeks (3 weeks) with 80/20 polarized training
+- **RECOVERY Phase**: Supercompensation week (1 week) with EASY-only intensity enforcement
+- **PEAK Phase**: Race preparation (2-3 weeks) with 50-60% volume, maintained intensity
+- **TAPER Phase**: Final preparation (1 week) with 30-40% volume, brief race-pace touches only
 - **Real Calendar Tracking**: Knows where you are in your actual training cycle
+- **Sports Science Compliance**: Prevents inappropriate training combinations (e.g., HARD workouts in recovery weeks)
 
 ![Periodization](screenshots/periodization.png)
 
@@ -312,7 +339,24 @@ PREFERENCE_CYCLING=0.45
 # Recovery times (hours)
 RECOVERY_TIME_RUNNING=48
 RECOVERY_TIME_CYCLING=24
+
+# Training schedule enforcement
+TRAINING_REST_DAYS=0                    # Monday rest (0=Mon, 6=Sun)
+TRAINING_STRENGTH_DAYS=1               # Tuesday strength (1=Tue)
 ```
+
+### **Recent Major Improvements**
+
+**✅ Sports Science Compliance (v2.1)**:
+- Fixed CTL/ATL calculations to match TrainingPeaks/Garmin standards
+- Implemented proper PEAK and TAPER phase logic with volume reduction
+- Added mandatory strength training day enforcement
+- Enhanced workout title display (no more truncation)
+
+**✅ Architecture Fixes**:
+- Unified fitness-fatigue model across all analysis modules
+- Fixed data pipeline inconsistencies for reliable advanced analysis
+- Added phase-specific workout generation logic
 
 ## ⚙️ Technical Details
 

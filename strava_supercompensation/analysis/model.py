@@ -75,10 +75,11 @@ class BanisterModel:
         fitness = np.zeros(n_days)
         fatigue = np.zeros(n_days)
 
-        # Initialize with first day's load if present
+        # Initialize with first day's load if present - STANDARD CTL/ATL CALCULATION
         if len(training_loads) > 0 and training_loads[0] > 0:
-            fitness[0] = training_loads[0] * self.fitness_magnitude
-            fatigue[0] = training_loads[0] * self.fatigue_magnitude
+            # Use standard (1 - exp(-1/τ)) scaling, not magnitude factors
+            fitness[0] = training_loads[0] * (1 - np.exp(-1 / self.fitness_decay))
+            fatigue[0] = training_loads[0] * (1 - np.exp(-1 / self.fatigue_decay))
 
         # Calculate cumulative impulse responses with bounds checking
         for i in range(1, n_days):
@@ -86,10 +87,11 @@ class BanisterModel:
             fitness[i] = fitness[i-1] * np.exp(-1 / self.fitness_decay)
             fatigue[i] = fatigue[i-1] * np.exp(-1 / self.fatigue_decay)
 
-            # Add today's training impulse
+            # Add today's training impulse - STANDARD CTL/ATL CALCULATION
             if training_loads[i] > 0:
-                fitness[i] += training_loads[i] * self.fitness_magnitude
-                fatigue[i] += training_loads[i] * self.fatigue_magnitude
+                # Use standard (1 - exp(-1/τ)) scaling, not magnitude factors
+                fitness[i] += training_loads[i] * (1 - np.exp(-1 / self.fitness_decay))
+                fatigue[i] += training_loads[i] * (1 - np.exp(-1 / self.fatigue_decay))
 
             # Apply physiological bounds to prevent corruption
             fitness[i] = min(fitness[i], MAX_FITNESS)
@@ -134,8 +136,9 @@ class BanisterModel:
             future_fatigue = current_fatigue
 
             for day in range(days_ahead):
-                future_fitness = future_fitness * np.exp(-1 / self.fitness_decay) + load * self.fitness_magnitude
-                future_fatigue = future_fatigue * np.exp(-1 / self.fatigue_decay) + load * self.fatigue_magnitude
+                # Use standard CTL/ATL calculation
+                future_fitness = future_fitness * np.exp(-1 / self.fitness_decay) + load * (1 - np.exp(-1 / self.fitness_decay))
+                future_fatigue = future_fatigue * np.exp(-1 / self.fatigue_decay) + load * (1 - np.exp(-1 / self.fatigue_decay))
 
             future_form = future_fitness - future_fatigue
             recommendations[scenario_name] = {

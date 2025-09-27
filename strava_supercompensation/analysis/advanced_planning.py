@@ -36,7 +36,9 @@ class MesocycleType(Enum):
     ADAPTATION = "adaptation"      # Base building, gradual increase
     ACCUMULATION = "accumulation"  # High volume, moderate intensity
     INTENSIFICATION = "intensification"  # Higher intensity, lower volume
-    REALIZATION = "realization"    # Taper and peak
+    REALIZATION = "realization"    # Taper and peak (legacy)
+    PEAK = "peak"                  # Peak phase: maintain intensity, reduce volume
+    TAPER = "taper"               # Taper phase: minimal volume, race-pace touches
     RECOVERY = "recovery"          # Active recovery and regeneration
     MAINTENANCE = "maintenance"    # Maintain fitness with minimal stress
 
@@ -324,10 +326,12 @@ class TrainingPlanGenerator:
         if target_date:
             days_to_event = (target_date - datetime.now(timezone.utc)).days
 
-            if days_to_event <= 14:
-                return MesocycleType.REALIZATION  # Taper
+            if days_to_event <= 7:
+                return MesocycleType.TAPER  # Final week taper
+            elif days_to_event <= 21:
+                return MesocycleType.PEAK  # Peak phase (2-3 weeks)
             elif days_to_event <= 30:
-                return MesocycleType.INTENSIFICATION  # Peak intensity
+                return MesocycleType.INTENSIFICATION  # Build intensity
             elif days_to_event <= 60:
                 return MesocycleType.ACCUMULATION  # Build volume
             else:
@@ -420,14 +424,14 @@ class TrainingPlanGenerator:
         # Load percentages are relative to base weekly TSS
         patterns = {
             MesocycleType.ADAPTATION: {
-                'loads': get_env_loads('MESOCYCLE_ADAPTATION_LOADS', [70, 80, 90, 60]),
+                'loads': get_env_loads('MESOCYCLE_ADAPTATION_LOADS', [75, 85, 95, 60]),  # Small increase for progression
                 'pattern': '3:1',
                 'easy': get_env_float('MESOCYCLE_ADAPTATION_EASY', 0.60),
                 'moderate': get_env_float('MESOCYCLE_ADAPTATION_MODERATE', 0.30),
                 'hard': get_env_float('MESOCYCLE_ADAPTATION_HARD', 0.10)
             },
             MesocycleType.ACCUMULATION: {
-                'loads': get_env_loads('MESOCYCLE_ACCUMULATION_LOADS', [80, 90, 100, 60]),
+                'loads': get_env_loads('MESOCYCLE_ACCUMULATION_LOADS', [85, 95, 105, 60]),  # Small increase for progression
                 'pattern': '3:1',
                 'easy': get_env_float('MESOCYCLE_ACCUMULATION_EASY', 0.50),
                 'moderate': get_env_float('MESOCYCLE_ACCUMULATION_MODERATE', 0.35),
@@ -447,8 +451,22 @@ class TrainingPlanGenerator:
                 'moderate': get_env_float('MESOCYCLE_REALIZATION_MODERATE', 0.20),
                 'hard': get_env_float('MESOCYCLE_REALIZATION_HARD', 0.10)
             },
+            MesocycleType.PEAK: {
+                'loads': get_env_loads('MESOCYCLE_PEAK_LOADS', [85, 75, 65, 55]),  # 50-60% volume, maintain intensity
+                'pattern': 'peak',
+                'easy': get_env_float('MESOCYCLE_PEAK_EASY', 0.50),
+                'moderate': get_env_float('MESOCYCLE_PEAK_MODERATE', 0.30),
+                'hard': get_env_float('MESOCYCLE_PEAK_HARD', 0.20)
+            },
+            MesocycleType.TAPER: {
+                'loads': get_env_loads('MESOCYCLE_TAPER_LOADS', [50, 40, 30, 20]),  # 30-40% volume
+                'pattern': 'taper',
+                'easy': get_env_float('MESOCYCLE_TAPER_EASY', 0.80),
+                'moderate': get_env_float('MESOCYCLE_TAPER_MODERATE', 0.15),
+                'hard': get_env_float('MESOCYCLE_TAPER_HARD', 0.05)
+            },
             MesocycleType.RECOVERY: {
-                'loads': get_env_loads('MESOCYCLE_RECOVERY_LOADS', [40, 30, 45, 35]),
+                'loads': get_env_loads('MESOCYCLE_RECOVERY_LOADS', [50, 45, 55, 45]),  # Increased slightly for better fitness maintenance
                 'pattern': 'structured_recovery',
                 'easy': get_env_float('MESOCYCLE_RECOVERY_EASY', 1.0),
                 'moderate': get_env_float('MESOCYCLE_RECOVERY_MODERATE', 0.0),
@@ -550,6 +568,8 @@ class TrainingPlanGenerator:
             MesocycleType.ACCUMULATION: get_env_float('HOUR_FACTOR_ACCUMULATION', 1.0),
             MesocycleType.INTENSIFICATION: get_env_float('HOUR_FACTOR_INTENSIFICATION', 0.9),
             MesocycleType.REALIZATION: get_env_float('HOUR_FACTOR_REALIZATION', 0.7),
+            MesocycleType.PEAK: get_env_float('HOUR_FACTOR_PEAK', 0.6),  # 50-60% volume
+            MesocycleType.TAPER: get_env_float('HOUR_FACTOR_TAPER', 0.4),  # 30-40% volume
             MesocycleType.RECOVERY: get_env_float('HOUR_FACTOR_RECOVERY', 0.6),
             MesocycleType.MAINTENANCE: get_env_float('HOUR_FACTOR_MAINTENANCE', 0.8)
         }
@@ -567,13 +587,13 @@ class TrainingPlanGenerator:
         # Where intensity_factor is typically 0.8-1.2 for sustainable training
         current_ctl = self.current_fitness
 
-        # More conservative calculation for sustainable weekly TSS
-        # Use CTL * 5-6 for sustainable base (not CTL * 7 which is too aggressive)
-        intensity_factor = 0.85  # Conservative factor for sustainability
+        # Proper training load calculation for fitness maintenance/progression
+        # Use CTL * 7 as baseline (standard maintenance), with slight increase for progression
+        intensity_factor = 1.0   # Standard factor for maintenance
         base_weekly_tss = min(
-            current_ctl * 5.5 * intensity_factor,  # More conservative than * 7
+            current_ctl * 7.0 * intensity_factor,  # Standard CTL * 7 for maintenance
             max_weekly_hours * 60,  # Respect time budget constraints
-            1200  # Absolute cap for safety (even for elite athletes)
+            1400  # Increased cap for serious athletes (was 1200)
         )
 
         self.logger.info(f"Base weekly TSS: {base_weekly_tss:.0f} (from CTL: {current_ctl:.1f}, max hours: {max_weekly_hours})")
@@ -779,6 +799,11 @@ class TrainingPlanGenerator:
         from .garmin_scores_analyzer import GarminScoresAnalyzer
         from datetime import datetime, timedelta, timezone
 
+        # DEBUG: Log input loads to identify reduction issue
+        self.logger.info(f"LOAD DEBUG: Current fitness (CTL): {self.current_fitness:.1f}")
+        self.logger.info(f"LOAD DEBUG: Input base_loads mean: {np.mean(base_loads):.1f}, max: {np.max(base_loads):.1f}, min: {np.min(base_loads):.1f}")
+        self.logger.info(f"LOAD DEBUG: Sample input loads (first 7 days): {base_loads[:7]}")
+
         # First, predict the form progression with base loads
         t = np.arange(len(base_loads))
         predicted_fitness, predicted_fatigue, predicted_performance = self.ff_model.calculate_fitness_fatigue(
@@ -841,13 +866,13 @@ class TrainingPlanGenerator:
                 wellness_modifier = 1.0  # Default to no modification if data unavailable
 
             # Calculate readiness modifier based on predicted form
-            # Formula: modifier = 1.0 + (predicted_form / 100)
-            # This gives a range roughly 0.5 to 1.5 for typical form values (-50 to +50)
+            # FIXED: Less aggressive form scaling for long-term planning
+            # Formula: modifier = 1.0 + (predicted_form / 200) - more conservative scaling
             form_value = predicted_form[day]
-            form_readiness_modifier = 1.0 + (form_value / 100.0)
+            form_readiness_modifier = 1.0 + (form_value / 200.0)
 
-            # Clamp form modifier to reasonable bounds (0.5 to 1.2)
-            form_readiness_modifier = max(0.5, min(1.2, form_readiness_modifier))
+            # Clamp form modifier to reasonable bounds (0.8 to 1.2) - less extreme reduction
+            form_readiness_modifier = max(0.8, min(1.2, form_readiness_modifier))
 
             # Combine form-based and wellness-based modifiers (take the more conservative)
             combined_modifier = min(form_readiness_modifier, wellness_modifier)
@@ -862,6 +887,10 @@ class TrainingPlanGenerator:
                 # Strength training gets fixed load regardless of form, but still respect health anomalies
                 min_strength_load = 40 * min(wellness_modifier, 1.0)  # Scale minimum by wellness
                 adjusted_loads[day] = max(min_strength_load, adjusted_loads[day])
+
+        # DEBUG: Log output loads to identify reduction issue
+        self.logger.info(f"LOAD DEBUG: Output adjusted_loads mean: {np.mean(adjusted_loads):.1f}, max: {np.max(adjusted_loads):.1f}, min: {np.min(adjusted_loads):.1f}")
+        self.logger.info(f"LOAD DEBUG: Sample output loads (first 7 days): {adjusted_loads[:7]}")
 
         return adjusted_loads
 
@@ -922,16 +951,30 @@ class TrainingPlanGenerator:
                     # Cap recovery loads to appropriate range (30-50 TSS max)
                     adjusted_loads[day] = min(50, adjusted_loads[day])
             else:
-                # For non-recovery weeks, use build/peak phase logic
-                workout_type = self._suggest_workout_type_for_build_phase(
-                    adjusted_loads[day], day % 7, week_num, current_mesocycle.cycle_type
-                )
+                # SPORTS SCIENCE FIX: Use phase-specific logic for each mesocycle type
+                if current_mesocycle.cycle_type == MesocycleType.PEAK:
+                    workout_type = self._suggest_workout_type_for_peak_phase(
+                        adjusted_loads[day], day % 7, week_num
+                    )
+                elif current_mesocycle.cycle_type == MesocycleType.TAPER:
+                    # Calculate days to race for taper logic (if race date available)
+                    days_to_race = None
+                    if hasattr(self, 'race_date') and self.race_date:
+                        days_to_race = (self.race_date - date).days
+                    workout_type = self._suggest_workout_type_for_taper_phase(
+                        adjusted_loads[day], day % 7, week_num, days_to_race
+                    )
+                else:
+                    # BUILD and MAINTENANCE phases use build logic
+                    workout_type = self._suggest_workout_type_for_build_phase(
+                        adjusted_loads[day], day % 7, week_num, current_mesocycle.cycle_type
+                    )
 
             # Create workout structure with dynamically adjusted load
             # CRITICAL FIX: Day numbering starts from 1, not 0
             workout = self._create_workout_structure(
                 date, day + 1, week_num, current_mesocycle.cycle_type,
-                workout_type, adjusted_loads[day], strength_days
+                workout_type, adjusted_loads[day], strength_days, day  # Pass 0-indexed day for strength check
             )
 
             # Track which mesocycle this workout belongs to for debugging
@@ -966,12 +1009,16 @@ class TrainingPlanGenerator:
         mesocycle_type: MesocycleType,
         workout_type: WorkoutType,
         load: float,
-        strength_days: List[int] = None
+        strength_days: List[int] = None,
+        day_index: int = None  # 0-indexed day for strength check
     ) -> WorkoutPlan:
         """Create detailed workout structure."""
 
+        # Use 0-indexed day for strength checking, fallback to day_num-1 if not provided
+        strength_check_day = day_index if day_index is not None else day_num - 1
+
         # Determine sport based on patterns and variety
-        primary_sport = self._select_sport(day_num, workout_type, strength_days)
+        primary_sport = self._select_sport(strength_check_day, workout_type, strength_days)
         alternatives = self._get_alternative_sports(primary_sport, workout_type)
 
         # Apply sport-specific load multipliers
@@ -979,6 +1026,9 @@ class TrainingPlanGenerator:
 
         # Apply sport multipliers normally
         adjusted_load = load * sport_multiplier
+
+        # DEBUG: Track load reduction in workout creation
+        self.logger.info(f"WORKOUT DEBUG Day {day_num}: input_load={load:.1f}, sport={primary_sport}, multiplier={sport_multiplier:.2f}, adjusted={adjusted_load:.1f}")
 
         # CRITICAL SAFETY: Apply final load constraints even after sport multipliers
         # This prevents sport multipliers from creating dangerous spikes
@@ -1026,6 +1076,8 @@ class TrainingPlanGenerator:
         duration_reduction_factors = {
             MesocycleType.RECOVERY: get_env_float('DURATION_FACTOR_RECOVERY', 0.7),  # 30% shorter
             MesocycleType.REALIZATION: get_env_float('DURATION_FACTOR_REALIZATION', 0.8),  # 20% shorter
+            MesocycleType.PEAK: get_env_float('DURATION_FACTOR_PEAK', 0.6),  # 40% shorter (maintain intensity)
+            MesocycleType.TAPER: get_env_float('DURATION_FACTOR_TAPER', 0.4),  # 60% shorter (minimal volume)
             MesocycleType.MAINTENANCE: get_env_float('DURATION_FACTOR_MAINTENANCE', 0.9),  # 10% shorter
         }
 
@@ -1058,6 +1110,9 @@ class TrainingPlanGenerator:
 
         # Intensity level determined by workout type (already correct due to mesocycle-first logic)
         intensity_level = self._get_intensity_level(workout_type)
+
+        # DEBUG: Final planned load before workout creation
+        self.logger.info(f"WORKOUT DEBUG Day {day_num}: final_planned_load={adjusted_load:.1f}")
 
         return WorkoutPlan(
             date=date,
@@ -1410,20 +1465,22 @@ class TrainingPlanGenerator:
             cycle_count += 1
 
             # SPORTS SCIENCE: Implement proper 3:1 periodization
-            # Alternate between 3-week build blocks and 1-week recovery blocks
-            if cycle_count % 2 == 0:
-                # Even cycles: 1-week RECOVERY mesocycles
+            # 3 weeks build, 1 week recovery (75% build weeks, 25% recovery weeks)
+            if cycle_count % 4 == 0:
+                # Every 4th cycle: 1-week RECOVERY mesocycle
                 mesocycle_type = MesocycleType.RECOVERY
                 cycle_weeks = min(1, remaining_weeks)
             else:
-                # Odd cycles: 3-week BUILD mesocycles
-                if total_weeks_planned < 8:
+                # Cycles 1-3: BUILD mesocycles
+                if total_weeks_planned < 12:
                     mesocycle_type = MesocycleType.ADAPTATION  # Base building first
+                elif remaining_weeks <= 1 and goal in ['performance', 'peak']:
+                    mesocycle_type = MesocycleType.TAPER  # Final taper week
                 elif remaining_weeks <= 4 and goal in ['performance', 'peak']:
-                    mesocycle_type = MesocycleType.REALIZATION  # Peak phase
+                    mesocycle_type = MesocycleType.PEAK  # Peak phase
                 else:
                     mesocycle_type = MesocycleType.ACCUMULATION  # Volume building
-                cycle_weeks = min(3, remaining_weeks)
+                cycle_weeks = min(1, remaining_weeks)  # Changed to 1-week cycles for proper 3:1
             mesocycle = self._create_mesocycle(
                 mesocycle_type,
                 current_date,
@@ -1577,6 +1634,8 @@ class TrainingPlanGenerator:
             MesocycleType.ACCUMULATION: "Increase training volume and load",
             MesocycleType.INTENSIFICATION: "Improve power and speed",
             MesocycleType.REALIZATION: "Peak performance and freshness",
+            MesocycleType.PEAK: "Peak performance - maintain intensity, reduce volume",
+            MesocycleType.TAPER: "Race preparation - minimal volume, race-pace readiness",
             MesocycleType.RECOVERY: "Regeneration and recovery",
             MesocycleType.MAINTENANCE: "Maintain fitness with minimal stress"
         }
@@ -1590,12 +1649,12 @@ class TrainingPlanGenerator:
         week_num: int,
         mesocycle_type: MesocycleType = None
     ) -> WorkoutType:
-        """Suggest workout type for BUILD/PEAK phases based on load and schedule.
+        """Suggest workout type for BUILD phases based on load and schedule.
 
-        Note: RECOVERY mesocycles are handled separately to ensure proper sports science compliance.
+        Note: RECOVERY, PEAK, and TAPER mesocycles are handled separately with phase-specific logic.
         """
 
-        # This function only handles BUILD/PEAK phases - RECOVERY handled at higher level
+        # This function only handles BUILD phases - other phases handled at higher level
         if load == 0:
             return WorkoutType.REST
         elif load < 25:
@@ -1622,6 +1681,88 @@ class TrainingPlanGenerator:
                 return WorkoutType.LONG
             else:
                 return WorkoutType.INTERVALS
+
+    def _suggest_workout_type_for_peak_phase(
+        self,
+        load: float,
+        day_of_week: int,
+        week_num: int
+    ) -> WorkoutType:
+        """Suggest workout type for PEAK phases: maintain intensity, reduce volume (~50-60%).
+
+        PEAK phase sports science principles:
+        - Maintain race-pace intensity with reduced volume
+        - Focus on neuromuscular power and race-specific efforts
+        - Shorter sessions but maintain quality
+        - 50-60% of build phase volume
+        """
+
+        if load == 0:
+            return WorkoutType.REST
+        elif load < 20:  # Lower threshold for peak phase
+            return WorkoutType.RECOVERY
+        elif load < 45:  # Reduced volume aerobic work
+            return WorkoutType.AEROBIC
+        elif load < 65:  # Maintain intensity but shorter duration
+            if day_of_week in [1, 4]:  # Key intensity days
+                return WorkoutType.THRESHOLD  # Race-pace efforts
+            else:
+                return WorkoutType.TEMPO
+        elif load < 85:  # High-quality sessions
+            if day_of_week == 5:  # Saturday - moderate long session
+                return WorkoutType.AEROBIC  # Shorter "long" run
+            elif day_of_week in [1, 4]:  # Tuesday/Friday - sharp intervals
+                return WorkoutType.VO2MAX  # Maintain neuromuscular power
+            else:
+                return WorkoutType.THRESHOLD
+        else:
+            # Peak loads: race-specific efforts only
+            if day_of_week == 5:  # Saturday - race simulation
+                return WorkoutType.THRESHOLD  # Race-pace practice
+            else:
+                return WorkoutType.INTERVALS  # Sharp, short efforts
+
+    def _suggest_workout_type_for_taper_phase(
+        self,
+        load: float,
+        day_of_week: int,
+        week_num: int,
+        days_to_race: int = None
+    ) -> WorkoutType:
+        """Suggest workout type for TAPER phases: minimal volume, race-pace touches only.
+
+        TAPER phase sports science principles:
+        - 30-40% of build phase volume
+        - Brief race-pace touches to maintain neuromuscular readiness
+        - Mostly easy aerobic work
+        - No long sessions (>60min dangerous close to race)
+        - Openers only in final days
+        """
+
+        if load == 0:
+            return WorkoutType.REST
+        elif load < 15:  # Very low threshold for taper
+            return WorkoutType.RECOVERY
+        elif load < 35:  # Mostly easy aerobic work
+            return WorkoutType.AEROBIC
+        elif load < 50:  # Limited moderate efforts
+            # Only brief race-pace touches
+            if day_of_week in [1, 4] and (days_to_race is None or days_to_race > 3):
+                return WorkoutType.TEMPO  # Brief race-pace touches
+            else:
+                return WorkoutType.AEROBIC
+        elif load < 65:  # Rare higher efforts
+            # Only if more than 5 days from race
+            if days_to_race is None or days_to_race > 5:
+                if day_of_week in [1, 4]:
+                    return WorkoutType.THRESHOLD  # Very brief race-pace
+                else:
+                    return WorkoutType.AEROBIC
+            else:
+                return WorkoutType.AEROBIC  # Too close to race
+        else:
+            # High loads inappropriate during taper - cap at aerobic
+            return WorkoutType.AEROBIC
 
     def _select_sport(self, day_num: int, workout_type: WorkoutType, strength_days: List[int] = None) -> str:
         """Select appropriate sport for the workout using configuration preferences."""
@@ -2061,10 +2202,9 @@ class TrainingPlanGenerator:
         """
         import random
 
-        # SPORTS SCIENCE: RECOVERY weeks MUST only have EASY intensity - this is inviolable
-        # This is the FINAL enforcer of recovery week principles
+        # SPORTS SCIENCE: Phase-specific intensity enforcement
         if mesocycle.cycle_type == MesocycleType.RECOVERY:
-            # Force ALL recovery week workouts to EASY intensity, no exceptions
+            # RECOVERY weeks MUST only have EASY intensity - this is inviolable
             for workout in workouts:
                 if workout.workout_type != WorkoutType.REST:
                     # Ensure workout type is RECOVERY
@@ -2083,6 +2223,46 @@ class TrainingPlanGenerator:
                     workout.planned_load = min(50, workout.planned_load)
 
             # EXIT IMMEDIATELY - no random intensity assignment for recovery weeks
+            return
+
+        elif mesocycle.cycle_type == MesocycleType.PEAK:
+            # PEAK phases: maintain intensity but cap durations and enforce race-pace focus
+            for workout in workouts:
+                if workout.workout_type != WorkoutType.REST:
+                    # Cap durations to 50-60% of build phase
+                    if workout.duration > 90:  # Long sessions become moderate
+                        workout.duration = min(90, int(workout.duration * 0.6))
+                        workout.planned_load = min(85, workout.planned_load)
+
+                    # Ensure THRESHOLD and VO2MAX workouts maintain race-pace quality
+                    if workout.workout_type in [WorkoutType.THRESHOLD, WorkoutType.VO2MAX]:
+                        workout.description = f"Peak phase race-pace {workout.primary_sport.lower()} - maintain intensity, reduced volume"
+            return
+
+        elif mesocycle.cycle_type == MesocycleType.TAPER:
+            # TAPER phases: minimal volume, mostly easy, brief race-pace touches only
+            for workout in workouts:
+                if workout.workout_type != WorkoutType.REST:
+                    # Cap all durations severely (30-40% of build phase)
+                    original_duration = workout.duration
+                    workout.duration = min(60, int(workout.duration * 0.4))  # 40% volume cap
+                    workout.planned_load = min(50, int(workout.planned_load * 0.4))
+
+                    # Force most workouts to EASY, only brief touches allowed
+                    if workout.workout_type == WorkoutType.LONG:
+                        # No long sessions during taper
+                        workout.workout_type = WorkoutType.AEROBIC
+                        workout.intensity_level = 'easy'
+                        workout.title = self._generate_workout_title(WorkoutType.AEROBIC, workout.primary_sport)
+                    elif workout.workout_type in [WorkoutType.VO2MAX, WorkoutType.INTERVALS]:
+                        # Very brief race-pace touches only
+                        workout.duration = min(45, workout.duration)
+                        workout.description = f"Taper opener - brief race-pace touches only"
+                    elif workout.workout_type == WorkoutType.RECOVERY:
+                        workout.intensity_level = 'easy'
+
+                    # Cap all workout loads in taper
+                    workout.planned_load = min(50, workout.planned_load)
             return
 
         # Skip REST days - only consider workouts with actual training load

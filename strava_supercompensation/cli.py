@@ -757,8 +757,8 @@ def recommend():
 
                     # Get activity name
                     activity = plan.get('activity', 'Unknown')
-                    if len(activity) > 24:
-                        activity = activity[:21] + "..."
+                    if len(activity) > 29:  # Column width is 32, leave room for duration
+                        activity = activity[:26] + "..."
 
                     # Get second session info
                     second_session = ""
@@ -2296,8 +2296,8 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
 
                     # Get activity name
                     activity = plan.get('activity', 'Unknown')
-                    if len(activity) > 24:
-                        activity = activity[:21] + "..."
+                    if len(activity) > 29:  # Column width is 32, leave room for duration
+                        activity = activity[:26] + "..."
 
                     # Get second session info
                     second_session = ""
@@ -2746,8 +2746,8 @@ def show_training_plan(duration):
 
                     # Get activity name
                     activity = plan_day.get('activity', 'Unknown')
-                    if len(activity) > 24:
-                        activity = activity[:21] + "..."
+                    if len(activity) > 29:  # Column width is 32, leave room for duration
+                        activity = activity[:26] + "..."
 
                     # Get second session info
                     second_session = ""

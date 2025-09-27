@@ -248,40 +248,92 @@ class IntegratedTrainingAnalyzer:
         adjusted_recovery[overtraining_mask] = np.minimum(adjusted_recovery[overtraining_mask], 60.0)
         combined['overall_recovery'] = adjusted_recovery
 
-        # Calculate composite readiness score
-        # Weight: 40% form, 30% PerPot, 30% recovery
-        # Form normalization: Scale form to 0-1 range (form typically ranges from -50 to +50 for realistic training)
+        # Calculate composite readiness score incorporating Garmin wellness data
+        # New weights: 30% form, 20% PerPot, 20% recovery, 30% Garmin wellness
+
         # Ensure all values are float to avoid any type issues
-        form_normalized = np.clip((combined['ff_form'].astype(float) + 50) / 100, 0, 1)
+        form_vals = combined['ff_form'].astype(float)
+        fatigue_vals = combined['ff_fatigue'].astype(float)
+
+        # CRITICAL FIX: Detect dangerous "high form + high fatigue" state (non-functional overreaching)
+        # This occurs when TSB is high but ATL is also very high (>100), indicating overreaching
+        high_form_high_fatigue_mask = (form_vals > 20) & (fatigue_vals > 100)
+
+        # Apply sports science correction: cap form at -10 when in overreaching state
+        corrected_form = form_vals.copy()
+        corrected_form[high_form_high_fatigue_mask] = -10  # Force negative form for overreaching
+
+        form_normalized = np.clip((corrected_form + 50) / 100, 0, 1)
         recovery_normalized = np.clip(combined['overall_recovery'].astype(float) / 100, 0, 1)
         perpot_normalized = np.clip(combined['perpot_performance'].astype(float), 0, 1)
 
-        # Heavy penalty for overtraining risk
-        overtraining_penalty = combined['overtraining_risk'].apply(lambda x: 0.5 if x else 1.0)
+        # Get Garmin wellness readiness for each date
+        wellness_readiness = []
+        for date in combined.index:
+            try:
+                from ..analysis.garmin_scores_analyzer import GarminScoresAnalyzer
+                analyzer = GarminScoresAnalyzer(user_id="user")
+                wellness_data = analyzer.get_readiness_score(date)
+                readiness = wellness_data.get('readiness_score', 70.0)
+                wellness_readiness.append(readiness if readiness is not None else 70.0)
+            except Exception:
+                wellness_readiness.append(70.0)  # Default if no data
+
+        wellness_normalized = np.clip(np.array(wellness_readiness) / 100, 0, 1)
+
+        # SPORTS SCIENCE: Replace binary overtraining_risk with nuanced risk states
+        # Define precise risk states instead of confusing binary flag
+        risk_state = []
+        for i in range(len(combined)):
+            if high_form_high_fatigue_mask[i]:
+                risk_state.append("NON_FUNCTIONAL_OVERREACHING")
+            elif combined['overtraining_risk'].iloc[i]:
+                risk_state.append("HIGH_STRAIN")
+            else:
+                risk_state.append("SAFE")
+
+        combined['risk_state'] = risk_state
+        # Keep overtraining_risk for backward compatibility but derive from risk_state
+        combined['overtraining_risk'] = combined['risk_state'].isin(['NON_FUNCTIONAL_OVERREACHING', 'HIGH_STRAIN'])
+
+        # Apply appropriate penalties based on risk state
+        overtraining_penalty = []
+        for state in risk_state:
+            if state == "NON_FUNCTIONAL_OVERREACHING":
+                overtraining_penalty.append(0.6)  # Most severe - immediate rest needed
+            elif state == "HIGH_STRAIN":
+                overtraining_penalty.append(0.8)  # Significant load reduction
+            else:
+                overtraining_penalty.append(1.0)  # Normal training
+        overtraining_penalty = np.array(overtraining_penalty)
 
         combined['composite_readiness'] = np.clip((
-            0.4 * form_normalized +
-            0.3 * perpot_normalized +
-            0.3 * recovery_normalized
+            0.3 * form_normalized +
+            0.2 * perpot_normalized +
+            0.2 * recovery_normalized +
+            0.3 * wellness_normalized
         ) * overtraining_penalty * 100, 0, 100)  # Ensure 0-100 range
 
-        # Add training recommendations based on composite
+        # Add training recommendations based on composite and risk state
         combined['recommendation'] = combined.apply(
-            lambda row: self._get_recommendation_from_composite(
+            lambda row: self._get_recommendation_from_risk_state(
                 row['composite_readiness'],
-                row['overtraining_risk']
+                row['risk_state']
             ),
             axis=1
         )
 
         return combined
 
-    def _get_recommendation_from_composite(self, readiness: float, overtraining_risk: bool = False) -> str:
-        """Get training recommendation from composite readiness score."""
-        # Override with rest if overtraining detected
-        if overtraining_risk:
-            return "REST"
+    def _get_recommendation_from_risk_state(self, readiness: float, risk_state: str) -> str:
+        """Get training recommendation from composite readiness score and risk state."""
+        # SPORTS SCIENCE: Handle each risk state appropriately
+        if risk_state == "NON_FUNCTIONAL_OVERREACHING":
+            return "REST"  # Immediate rest required despite high form
+        elif risk_state == "HIGH_STRAIN":
+            return "RECOVERY"  # Active recovery needed
 
+        # For SAFE state, use normal readiness-based recommendations
         if readiness >= 85:
             return "PEAK"
         elif readiness >= 70:
@@ -331,20 +383,29 @@ class IntegratedTrainingAnalyzer:
                 'PEAK': 'Peak intensity training or race simulation'
             }
 
-            # Generate rationale
-            rationale_parts = []
-            if latest['overtraining_risk']:
-                rationale_parts.append("overtraining risk detected")
-            if form_score > 20:
-                rationale_parts.append("good form")
-            elif form_score < -10:
-                rationale_parts.append("accumulated fatigue")
-            if readiness > 75:
-                rationale_parts.append("high readiness")
-            elif readiness < 40:
-                rationale_parts.append("low readiness")
+            # Generate precise rationale based on risk state
+            risk_state = latest.get('risk_state', 'SAFE')
 
-            rationale = f"Based on current {', '.join(rationale_parts) if rationale_parts else 'training status'}"
+            if risk_state == "NON_FUNCTIONAL_OVERREACHING":
+                rationale = f"Non-functional overreaching detected (Form: {form_score:.1f}, high fatigue). Despite peaked TSB, immediate rest is required to prevent performance decline and avoid true overtraining."
+            elif risk_state == "HIGH_STRAIN":
+                rationale = f"High training strain detected (Readiness: {readiness:.1f}). Active recovery needed to absorb training load."
+            else:
+                # Normal rationale for safe training state
+                rationale_parts = []
+                if form_score > 20:
+                    rationale_parts.append("excellent form")
+                elif form_score > 5:
+                    rationale_parts.append("good form")
+                elif form_score < -10:
+                    rationale_parts.append("accumulated fatigue")
+
+                if readiness > 75:
+                    rationale_parts.append("high readiness")
+                elif readiness < 40:
+                    rationale_parts.append("low readiness")
+
+                rationale = f"Based on current {', '.join(rationale_parts) if rationale_parts else 'training status'}"
 
             return {
                 'recommendation': recommendation,
@@ -388,7 +449,8 @@ class IntegratedTrainingAnalyzer:
                     # Store advanced metrics in JSON field if available
                     existing.advanced_metrics = {
                         'perpot_performance': float(row['perpot_performance']),
-                        'overtraining_risk': bool(row['overtraining_risk']),
+                        'risk_state': str(row['risk_state']),
+                        'overtraining_risk': bool(row['overtraining_risk']),  # Keep for backward compatibility
                         'overall_recovery': float(row['overall_recovery']),
                         'composite_readiness': float(row['composite_readiness'])
                     }

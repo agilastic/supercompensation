@@ -825,55 +825,42 @@ class RecommendationEngine:
         return wellness_data if wellness_data else None
 
     def _calculate_refined_readiness(self, wellness_data: Dict) -> float:
-        """Calculate a refined readiness score from HRV, sleep, and stress metrics."""
-        score_components = []
-        weights = []
+        """Calculate readiness score using the same method as garmin_scores_analyzer.py."""
+        from ..config import config
 
-        # HRV component (40% weight) - most important indicator
+        components = {}
+        overall_score = None
+
+        # HRV Score (use configured weight from .env)
         if 'hrv_score' in wellness_data and wellness_data['hrv_score'] is not None:
-            hrv_score = wellness_data['hrv_score']
-            score_components.append(hrv_score)
-            weights.append(0.4)
+            components['hrv'] = {
+                'score': wellness_data['hrv_score'],
+                'weight': config.READINESS_WEIGHT_HRV
+            }
 
-            # Adjust based on HRV status
-            if 'hrv_status' in wellness_data:
-                status = wellness_data['hrv_status']
-                if status == 'unbalanced':
-                    score_components[-1] *= 0.8  # Reduce score for unbalanced
-                elif status == 'low':
-                    score_components[-1] *= 0.6  # Significantly reduce for low HRV
-
-        # Sleep component (35% weight)
+        # Sleep Score (use configured weight from .env)
         if 'sleep_score' in wellness_data and wellness_data['sleep_score'] is not None:
-            sleep_score = wellness_data['sleep_score']
-            score_components.append(sleep_score)
-            weights.append(0.35)
+            components['sleep'] = {
+                'score': wellness_data['sleep_score'],
+                'weight': config.READINESS_WEIGHT_SLEEP
+            }
 
-            # Consider sleep duration
-            if 'sleep_duration' in wellness_data and wellness_data['sleep_duration']:
-                duration = wellness_data['sleep_duration']
-                if duration < 6:  # Less than 6 hours
-                    score_components[-1] *= 0.7
-                elif duration < 7:  # 6-7 hours
-                    score_components[-1] *= 0.85
-                elif duration > 9:  # More than 9 hours (might indicate fatigue)
-                    score_components[-1] *= 0.9
-
-        # Stress component (25% weight) - inverse relationship
+        # Stress Score (inverted from Garmin, use configured weight from .env)
         if 'stress_avg' in wellness_data and wellness_data['stress_avg'] is not None:
-            stress_avg = wellness_data['stress_avg']
-            # Convert stress to readiness (0-100 stress becomes 100-0 readiness)
-            stress_readiness = max(0, 100 - stress_avg)
-            score_components.append(stress_readiness)
-            weights.append(0.25)
+            stress_score = max(0, 100 - wellness_data['stress_avg'])  # Invert stress to readiness
+            components['stress'] = {
+                'score': stress_score,
+                'weight': config.READINESS_WEIGHT_STRESS
+            }
 
-        # Calculate weighted average
-        if score_components:
-            total_weight = sum(weights)
-            weighted_score = sum(s * w for s, w in zip(score_components, weights))
-            return round(weighted_score / total_weight, 1)
-        else:
-            return 70.0  # Default neutral readiness if no data
+        # Calculate weighted overall score if we have any components (same logic as garmin_scores_analyzer)
+        if components:
+            total_weight = sum(comp['weight'] for comp in components.values())
+            if total_weight > 0:
+                weighted_sum = sum(comp['score'] * comp['weight'] for comp in components.values())
+                overall_score = weighted_sum / total_weight
+
+        return round(overall_score, 1) if overall_score is not None else 70.0
 
     def _calculate_training_modifier(self, wellness_data: Dict) -> float:
         """Calculate a training intensity/volume modifier based on wellness."""

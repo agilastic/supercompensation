@@ -103,25 +103,35 @@ class FitnessFatigueModel:
 
         # FIXED: Initialize with current state, then apply decay and add first day's load
         if n_days > 0:
-            # Start day 0 with decayed initial state plus first day's training
-            fitness[0] = initial_fitness * np.exp(-1 / self.tau1)
-            fatigue[0] = initial_fatigue * np.exp(-1 / self.tau2)
+            # Standard CTL/ATL calculation with proper scaling
+            decay_fitness = np.exp(-1 / self.tau1)
+            decay_fatigue = np.exp(-1 / self.tau2)
 
-            # Add first day's training impulse
+            # Start day 0 with decayed initial state plus first day's training
+            fitness[0] = initial_fitness * decay_fitness
+            fatigue[0] = initial_fatigue * decay_fatigue
+
+            # Add first day's training impulse WITH PROPER SCALING
             if len(training_loads) > 0 and training_loads[0] > 0:
-                fitness[0] += training_loads[0] * self.k1
-                fatigue[0] += training_loads[0] * self.k2
+                fitness[0] += training_loads[0] * (1 - decay_fitness) * self.k1
+                fatigue[0] += training_loads[0] * (1 - decay_fatigue) * self.k2
 
         # Calculate cumulative impulse responses for subsequent days
         for i in range(1, n_days):
-            # Decay from previous day
-            fitness[i] = fitness[i-1] * np.exp(-1 / self.tau1)
-            fatigue[i] = fatigue[i-1] * np.exp(-1 / self.tau2)
+            # Standard CTL/ATL calculation with proper scaling
+            # This matches what athletes expect from Training Peaks, Garmin, etc.
+            decay_fitness = np.exp(-1 / self.tau1)
+            decay_fatigue = np.exp(-1 / self.tau2)
 
-            # Add today's training impulse
+            # Decay from previous day
+            fitness[i] = fitness[i-1] * decay_fitness
+            fatigue[i] = fatigue[i-1] * decay_fatigue
+
+            # Add today's training impulse WITH PROPER SCALING
             if i < len(training_loads) and training_loads[i] > 0:
-                fitness[i] += training_loads[i] * self.k1
-                fatigue[i] += training_loads[i] * self.k2
+                # Standard CTL/ATL uses (1 - decay) as the scaling factor
+                fitness[i] += training_loads[i] * (1 - decay_fitness) * self.k1
+                fatigue[i] += training_loads[i] * (1 - decay_fatigue) * self.k2
 
         # Calculate form (Training Stress Balance)
         performance = fitness - fatigue

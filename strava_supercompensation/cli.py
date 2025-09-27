@@ -203,6 +203,7 @@ def analyze(days):
             table.add_column("Intensity", style="yellow", width=4)
             table.add_column("Load", style="magenta", width=5)
             table.add_column("Fitness", style="blue", width=6)
+            table.add_column("Fatigue", style="bright_red", width=6)
             table.add_column("Form", style="green", width=5)
             table.add_column("HRV", style="red", width=4)
             table.add_column("Sleep", style="purple", width=5)
@@ -319,6 +320,7 @@ def analyze(days):
                             intensity,
                             f"{h['load']:.0f}",
                             f"{h['fitness']:.1f}",
+                            f"{h['fatigue']:.1f}",
                             f"{h['form']:.1f}",
                             hrv_rmssd,
                             sleep_score,
@@ -444,6 +446,7 @@ def analyze(days):
                         intensity,
                         f"{h['load']:.0f}",
                         f"{h['fitness']:.1f}",
+                        f"{h['fatigue']:.1f}",
                         f"{h['form']:.1f}",
                         hrv_rmssd,
                         sleep_score,
@@ -679,9 +682,33 @@ def recommend():
                                     pass
 
                         weekly_hours = total_weekly_minutes / 60
-                        budget_hours = config.TRAINING_MAX_WEEKLY_HOURS
+
+                        # Apply mesocycle-specific hour budget
+                        base_budget_hours = config.TRAINING_MAX_WEEKLY_HOURS
+                        def get_env_float(key: str, default: float) -> float:
+                            try:
+                                return float(os.getenv(key, str(default)))
+                            except:
+                                return default
+
+                        # Get hour reduction factor based on week type
+                        hour_factors = {
+                            "BUILD 1": get_env_float('HOUR_FACTOR_ACCUMULATION', 1.0),
+                            "BUILD 2": get_env_float('HOUR_FACTOR_ACCUMULATION', 1.0),
+                            "BUILD 3": get_env_float('HOUR_FACTOR_ACCUMULATION', 1.0),
+                            "RECOVERY": get_env_float('HOUR_FACTOR_RECOVERY', 0.6),
+                            "PEAK 1": get_env_float('HOUR_FACTOR_INTENSIFICATION', 0.9),
+                            "PEAK 2": get_env_float('HOUR_FACTOR_INTENSIFICATION', 0.9),
+                            "TAPER 1": get_env_float('HOUR_FACTOR_REALIZATION', 0.7),
+                            "TAPER 2": get_env_float('HOUR_FACTOR_REALIZATION', 0.7),
+                            "MAINTENANCE": get_env_float('HOUR_FACTOR_MAINTENANCE', 0.8)
+                        }
+
+                        hour_factor = hour_factors.get(week_type, 1.0)
+                        budget_hours = base_budget_hours * hour_factor
+
                         time_status = "✅" if weekly_hours <= budget_hours else "⚠️"
-                        time_summary = f"{time_status} {weekly_hours:.1f}h/{budget_hours}h"
+                        time_summary = f"{time_status} {weekly_hours:.1f}h/{budget_hours:.1f}h"
 
                         table.add_row(
                             f"[bold]W{week_num+1}[/bold]",
@@ -1878,10 +1905,14 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
                 "🎯 Optimal" if latest['perpot_performance'] > 0.8 else "📊 Good",
                 "—"
             )
+            # Show precise risk state instead of binary overtraining flag
+            risk_state = latest.get('risk_state', 'SAFE')
+            risk_display = risk_state.replace('_', ' ').title()
+            risk_status = "⚠️ REST NEEDED" if risk_state == "NON_FUNCTIONAL_OVERREACHING" else ("🟡 RECOVERY" if risk_state == "HIGH_STRAIN" else "✅ SAFE")
             fitness_table.add_row(
-                "Overtraining Risk",
-                "YES" if latest['overtraining_risk'] else "NO",
-                "⚠️ CAUTION" if latest['overtraining_risk'] else "✅ SAFE",
+                "Risk State",
+                risk_display,
+                risk_status,
                 "—"
             )
 
@@ -2067,27 +2098,35 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
         training_plan = []
         if plan_result and 'daily_workouts' in plan_result:
             daily_data = plan_result.get('visualizations', {}).get('daily_data', [])
-            # FIXED: Skip day 0 (today) and maintain correct data correlation
-            for i, workout in enumerate(plan_result['daily_workouts']):
-                if i == 0:  # Skip today (day 0)
-                    continue
-                # FIXED: Get corresponding daily simulation data with correct index
-                # Since we skipped day 0, we need to adjust the index
-                daily_sim = daily_data[i] if i < len(daily_data) else {}
 
-                # FIXED: Use sequential day numbering and dates to prevent scrambling
-                sequential_day = len(training_plan) + 1  # Start from 1, increment sequentially
-                # Calculate date sequentially from plan start date (today + sequential_day)
-                from datetime import date, timedelta
-                plan_date = date.today() + timedelta(days=sequential_day)
+            # CRITICAL FIX: Sort workouts chronologically to ensure proper date sequencing
+            daily_workouts = plan_result['daily_workouts']
+            sorted_workouts = sorted(daily_workouts, key=lambda w: w.date)
+
+
+            # Skip day 0 (today) and maintain correct data correlation
+            for i, workout in enumerate(sorted_workouts):
+                if workout.day_number <= 0:  # Skip day 0 or negative
+                    continue
+
+                # CRITICAL FIX: Find corresponding daily simulation data by day_number, not array index
+                daily_sim = {}
+                for sim_data in daily_data:
+                    if sim_data.get('day') == workout.day_number:
+                        daily_sim = sim_data
+                        break
+
+                # Use the actual workout date and day number from the WorkoutPlan
+                actual_day = workout.day_number if hasattr(workout, 'day_number') else len(training_plan) + 1
+                actual_date = workout.date.date() if hasattr(workout.date, 'date') else workout.date
 
                 # Convert WorkoutPlan dataclass to dictionary with simulation data
-                training_plan.append({
-                    'day': sequential_day,
-                    'date': plan_date.strftime('%m/%d'),
-                    'date_obj': plan_date,  # Keep the datetime object for day name conversion
+                plan_entry = {
+                    'day': actual_day,
+                    'date': actual_date.strftime('%m/%d'),
+                    'date_obj': actual_date,  # Keep the datetime object for day name conversion
                     'recommendation': workout.intensity_level.upper(),
-                    'activity': f"{workout.primary_sport} Training ({workout.total_duration_min}m)" if workout.primary_sport != "Rest" else f"{workout.title} ({workout.total_duration_min}m)",
+                    'activity': f"{workout.title} ({workout.total_duration_min}m)",
                     'second_activity': (
                         f"{workout.second_activity_title} ({workout.second_activity_duration}m)"
                         if workout.second_activity_title else "—"
@@ -2098,7 +2137,9 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
                     'predicted_form': daily_sim.get('form', 0.0),
                     'fitness': daily_sim.get('fitness', 0.0),
                     'predicted_fitness': daily_sim.get('fitness', 0.0)
-                })
+                }
+
+                training_plan.append(plan_entry)
 
         # Display the training plan if generated successfully
         if training_plan:
@@ -2109,19 +2150,27 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
             table.add_column("Date", width=10)
             table.add_column("Week Type", style="bright_blue", width=10)
             table.add_column("Intensity", style="yellow", width=11)
-            table.add_column("Primary Activity & Duration", style="blue", width=24)
-            table.add_column("2nd Session & Duration", style="green", width=26)
+            table.add_column("Primary Activity & Duration", style="blue", width=32)
+            table.add_column("2nd Session & Duration", style="green", width=28)
             table.add_column("Load", style="magenta", width=4)
             table.add_column("Form", style="cyan", width=6)
             table.add_column("Fitness", style="green", width=7)
 
-            # For 30-day plan, add week separators
-            current_week = -1
+            # CRITICAL FIX: Process plans by week to ensure proper ordering
+            # Group plans by week first
+            weeks = {}
             for plan in training_plan:
                 week_num = (plan['day'] - 1) // 7
+                if week_num not in weeks:
+                    weeks[week_num] = []
+                weeks[week_num].append(plan)
+
+            # Now process weeks in order
+            for week_num in sorted(weeks.keys()):
+                week_plans = sorted(weeks[week_num], key=lambda p: p['day'])  # Sort days within week
 
                 # Add week separator for all plans (with weekly grouping for plans >= 7 days)
-                if plan_days >= 7 and week_num != current_week:
+                if plan_days >= 7:
                     current_week = week_num
                     table.add_section()
 
@@ -2148,7 +2197,7 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
                     }.get(week_type, "white")
 
                     # Calculate weekly time totals for this week
-                    week_plans = [p for p in training_plan if (p['day'] - 1) // 7 == week_num]
+                    # week_plans is already defined above
                     total_weekly_minutes = 0
                     for plan in week_plans:
                         # Extract duration from activity string (format: "Activity (60m)")
@@ -2170,9 +2219,33 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
                                 pass
 
                     weekly_hours = total_weekly_minutes / 60
-                    budget_hours = config.TRAINING_MAX_WEEKLY_HOURS
+
+                    # Apply mesocycle-specific hour budget
+                    base_budget_hours = config.TRAINING_MAX_WEEKLY_HOURS
+                    def get_env_float(key: str, default: float) -> float:
+                        try:
+                            return float(os.getenv(key, str(default)))
+                        except:
+                            return default
+
+                    # Get hour reduction factor based on week type
+                    hour_factors = {
+                        "BUILD 1": get_env_float('HOUR_FACTOR_ACCUMULATION', 1.0),
+                        "BUILD 2": get_env_float('HOUR_FACTOR_ACCUMULATION', 1.0),
+                        "BUILD 3": get_env_float('HOUR_FACTOR_ACCUMULATION', 1.0),
+                        "RECOVERY": get_env_float('HOUR_FACTOR_RECOVERY', 0.6),
+                        "PEAK 1": get_env_float('HOUR_FACTOR_INTENSIFICATION', 0.9),
+                        "PEAK 2": get_env_float('HOUR_FACTOR_INTENSIFICATION', 0.9),
+                        "TAPER 1": get_env_float('HOUR_FACTOR_REALIZATION', 0.7),
+                        "TAPER 2": get_env_float('HOUR_FACTOR_REALIZATION', 0.7),
+                        "MAINTENANCE": get_env_float('HOUR_FACTOR_MAINTENANCE', 0.8)
+                    }
+
+                    hour_factor = hour_factors.get(week_type, 1.0)
+                    budget_hours = base_budget_hours * hour_factor
+
                     time_status = "✅" if weekly_hours <= budget_hours else "⚠️"
-                    time_summary = f"{time_status} {weekly_hours:.1f}h/{budget_hours}h"
+                    time_summary = f"{time_status} {weekly_hours:.1f}h/{budget_hours:.1f}h"
 
                     table.add_row(
                         f"[bold]W{week_num+1}[/bold]",
@@ -2186,100 +2259,102 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
                         "[white]───────[/white]"
                     )
 
-                # Color code recommendations
-                rec_colors = {
-                    "REST": "red",
-                    "RECOVERY": "yellow",
-                    "EASY": "green",
-                    "MODERATE": "cyan",
-                    "HARD": "magenta",
-                    "PEAK": "bold magenta"
-                }
-                rec_color = rec_colors.get(plan['recommendation'], "white")
+                # Now add each day in this week
+                for plan in week_plans:
+                    # Color code recommendations
+                    rec_colors = {
+                        "REST": "red",
+                        "RECOVERY": "yellow",
+                        "EASY": "green",
+                        "MODERATE": "cyan",
+                        "HARD": "magenta",
+                        "PEAK": "bold magenta"
+                    }
+                    rec_color = rec_colors.get(plan['recommendation'], "white")
 
-                # Get week type for this day
-                week_types = {
-                    0: "BUILD 1", 1: "BUILD 2", 2: "BUILD 3", 3: "RECOVERY",  # Weeks 1-4
-                    4: "BUILD 1", 5: "BUILD 2", 6: "BUILD 3", 7: "RECOVERY",  # Weeks 5-8
-                    8: "BUILD 1", 9: "BUILD 2", 10: "BUILD 3", 11: "RECOVERY", # Weeks 9-12
-                    12: "PEAK 1", 13: "PEAK 2", 14: "TAPER 1", 15: "TAPER 2"   # Weeks 13-16
-                }
-                # For longer plans, extend the pattern
-                if week_num not in week_types:
-                    cycle_week = week_num % 4
-                    if cycle_week < 3:
-                        week_types[week_num] = f"BUILD {cycle_week + 1}"
+                    # Get week type for this day (use the outer week_num)
+                    week_types = {
+                        0: "BUILD 1", 1: "BUILD 2", 2: "BUILD 3", 3: "RECOVERY",  # Weeks 1-4
+                        4: "BUILD 1", 5: "BUILD 2", 6: "BUILD 3", 7: "RECOVERY",  # Weeks 5-8
+                        8: "BUILD 1", 9: "BUILD 2", 10: "BUILD 3", 11: "RECOVERY", # Weeks 9-12
+                        12: "PEAK 1", 13: "PEAK 2", 14: "TAPER 1", 15: "TAPER 2"   # Weeks 13-16
+                    }
+                    # For longer plans, extend the pattern
+                    if week_num not in week_types:
+                        cycle_week = week_num % 4
+                        if cycle_week < 3:
+                            week_types[week_num] = f"BUILD {cycle_week + 1}"
+                        else:
+                            week_types[week_num] = "RECOVERY"
+
+                    week_type = week_types.get(week_num, "MAINTENANCE")
+                    week_type_color = {
+                        "BUILD 1": "bright_green", "BUILD 2": "green", "BUILD 3": "yellow",
+                        "RECOVERY": "bright_cyan", "PEAK 1": "bright_red", "PEAK 2": "red",
+                        "TAPER 1": "magenta", "TAPER 2": "bright_magenta", "MAINTENANCE": "white"
+                    }.get(week_type, "white")
+
+                    # Get activity name
+                    activity = plan.get('activity', 'Unknown')
+                    if len(activity) > 24:
+                        activity = activity[:21] + "..."
+
+                    # Get second session info
+                    second_session = ""
+                    if plan.get('second_activity'):
+                        second_activity = plan['second_activity']
+                        if len(second_activity) > 29:
+                            second_session = second_activity[:26] + "..."
+                        else:
+                            second_session = second_activity
                     else:
-                        week_types[week_num] = "RECOVERY"
+                        second_session = "—"
 
-                week_type = week_types.get(week_num, "MAINTENANCE")
-                week_type_color = {
-                    "BUILD 1": "bright_green", "BUILD 2": "green", "BUILD 3": "yellow",
-                    "RECOVERY": "bright_cyan", "PEAK 1": "bright_red", "PEAK 2": "red",
-                    "TAPER 1": "magenta", "TAPER 2": "bright_magenta", "MAINTENANCE": "white"
-                }.get(week_type, "white")
+                    # Format date to include day name: "We, 09/25"
+                    date_str = plan['date']
+                    if len(date_str) > 8:
+                        date_str = date_str[5:]  # Remove year, keep MM-DD
 
-                # Get activity name
-                activity = plan.get('activity', 'Unknown')
-                if len(activity) > 24:
-                    activity = activity[:21] + "..."
+                    # Add day name to date
+                    day_names = ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su']
 
-                # Get second session info
-                second_session = ""
-                if plan.get('second_activity'):
-                    second_activity = plan['second_activity']
-                    if len(second_activity) > 29:
-                        second_session = second_activity[:26] + "..."
-                    else:
-                        second_session = second_activity
-                else:
-                    second_session = "—"
+                    formatted_date = date_str  # Default to just date
 
-                # Format date to include day name: "We, 09/25"
-                date_str = plan['date']
-                if len(date_str) > 8:
-                    date_str = date_str[5:]  # Remove year, keep MM-DD
-
-                # Add day name to date
-                day_names = ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su']
-
-                formatted_date = date_str  # Default to just date
-
-                # Try to get day name from date
-                if 'date_obj' in plan and plan['date_obj']:
-                    try:
-                        day_name = day_names[plan['date_obj'].weekday()]
-                        formatted_date = f"{day_name}, {date_str}"
-                    except:
-                        pass
-                elif 'date' in plan and plan['date']:
-                    try:
-                        # Parse MM/DD format
-                        if '/' in plan['date']:
-                            month, day = plan['date'].split('/')
-                            current_year = datetime.now().year
-                            date_obj = datetime(current_year, int(month), int(day))
-
-                            # Adjust year if needed
-                            if date_obj < datetime.now() and (datetime.now() - date_obj).days > 30:
-                                date_obj = datetime(current_year + 1, int(month), int(day))
-
-                            day_name = day_names[date_obj.weekday()]
+                    # Try to get day name from date
+                    if 'date_obj' in plan and plan['date_obj']:
+                        try:
+                            day_name = day_names[plan['date_obj'].weekday()]
                             formatted_date = f"{day_name}, {date_str}"
-                    except:
-                        pass
+                        except:
+                            pass
+                    elif 'date' in plan and plan['date']:
+                        try:
+                            # Parse MM/DD format
+                            if '/' in plan['date']:
+                                month, day = plan['date'].split('/')
+                                current_year = datetime.now().year
+                                date_obj = datetime(current_year, int(month), int(day))
 
-                table.add_row(
-                    str(plan['day']),
-                    formatted_date,
-                    f"[{week_type_color}]{week_type}[/{week_type_color}]",
-                    f"[{rec_color}]{plan['recommendation']}[/{rec_color}]",
-                    f"[blue]{activity}[/blue]",
-                    f"[green]{second_session}[/green]" if plan.get('second_activity') else f"[white]{second_session}[/white]",
-                    f"{plan['suggested_load']:.0f}",
-                    f"{plan['predicted_form']:.1f}",
-                    f"{plan.get('predicted_fitness', 0):.1f}",
-                )
+                                # Adjust year if needed
+                                if date_obj < datetime.now() and (datetime.now() - date_obj).days > 30:
+                                    date_obj = datetime(current_year + 1, int(month), int(day))
+
+                                day_name = day_names[date_obj.weekday()]
+                                formatted_date = f"{day_name}, {date_str}"
+                        except:
+                            pass
+
+                    table.add_row(
+                        str(plan['day']),
+                        formatted_date,
+                        f"[{week_type_color}]{week_type}[/{week_type_color}]",
+                        f"[{rec_color}]{plan['recommendation']}[/{rec_color}]",
+                        f"[blue]{activity}[/blue]",
+                        f"[green]{second_session}[/green]" if plan.get('second_activity') else f"[white]{second_session}[/white]",
+                        f"{plan['suggested_load']:.0f}",
+                        f"{plan['predicted_form']:.1f}",
+                        f"{plan.get('predicted_fitness', 0):.1f}",
+                    )
 
             console.print(table)
 
@@ -2462,22 +2537,36 @@ def show_training_plan(duration):
         if plan and 'summary' in plan:
             console.print(f"[green]✅ {duration}-day plan generated successfully[/green]")
 
-            # Extract plan details like the working code does
+            # Extract plan details with proper chronological sorting
             training_plan = []
             if 'daily_workouts' in plan and plan['daily_workouts']:
                 daily_data = plan.get('visualizations', {}).get('daily_data', [])
-                # FIXED: Skip day 0 (today) and maintain correct data correlation
-                for i, workout in enumerate(plan['daily_workouts']):
-                    if i == 0:  # Skip today (day 0)
+
+                # CRITICAL FIX: Sort workouts chronologically to ensure proper date sequencing
+                daily_workouts = plan['daily_workouts']
+                sorted_workouts = sorted(daily_workouts, key=lambda w: w.date)
+
+                # Skip day 0 (today) and maintain correct data correlation
+                for i, workout in enumerate(sorted_workouts):
+                    # CRITICAL FIX: Skip based on day_number, not array index after sorting
+                    if workout.day_number <= 0:  # Skip today (day 0 or negative)
                         continue
-                    # FIXED: Get corresponding daily simulation data with correct index
-                    # Since we skipped day 0, we need to adjust the index
-                    daily_sim = daily_data[i] if i < len(daily_data) else {}
+                    # CRITICAL FIX: Find corresponding daily simulation data by day_number, not array index
+                    daily_sim = {}
+                    for sim_data in daily_data:
+                        if sim_data.get('day') == workout.day_number:
+                            daily_sim = sim_data
+                            break
+
+                    # Use actual workout date and day number
+                    actual_day = workout.day_number if hasattr(workout, 'day_number') else len(training_plan) + 1
+                    actual_date = workout.date.date() if hasattr(workout.date, 'date') else workout.date
+
                     # Convert WorkoutPlan dataclass to dictionary with simulation data
                     training_plan.append({
-                        'day': workout.day_number,
-                        'date': workout.date.strftime('%m/%d'),
-                        'date_obj': workout.date,  # Keep the datetime object for day name conversion
+                        'day': actual_day,
+                        'date': actual_date.strftime('%m/%d'),
+                        'date_obj': actual_date,  # Keep the datetime object for day name conversion
                         'recommendation': workout.intensity_level.upper(),
                         'activity': f"{workout.title} ({workout.total_duration_min}m)",
                         'second_activity': (
@@ -2500,8 +2589,8 @@ def show_training_plan(duration):
                 table.add_column("Date", width=10)
                 table.add_column("Week Type", style="bright_blue", width=10)
                 table.add_column("Intensity", style="yellow", width=11)
-                table.add_column("Primary Activity & Duration", style="blue", width=24)
-                table.add_column("2nd Activity & Duration", style="green", width=26)
+                table.add_column("Primary Activity & Duration", style="blue", width=32)
+                table.add_column("2nd Activity & Duration", style="green", width=28)
                 table.add_column("Load", style="magenta", width=4)
                 table.add_column("Form", style="cyan", width=6)
                 table.add_column("Fitness", style="green", width=7)
@@ -2576,12 +2665,36 @@ def show_training_plan(duration):
                                     pass
 
                         weekly_hours = total_weekly_minutes / 60
-                        budget_hours = config.TRAINING_MAX_WEEKLY_HOURS
+
+                        # Apply mesocycle-specific hour budget
+                        base_budget_hours = config.TRAINING_MAX_WEEKLY_HOURS
+                        def get_env_float(key: str, default: float) -> float:
+                            try:
+                                return float(os.getenv(key, str(default)))
+                            except:
+                                return default
+
+                        # Get hour reduction factor based on week type
+                        hour_factors = {
+                            "BUILD 1": get_env_float('HOUR_FACTOR_ACCUMULATION', 1.0),
+                            "BUILD 2": get_env_float('HOUR_FACTOR_ACCUMULATION', 1.0),
+                            "BUILD 3": get_env_float('HOUR_FACTOR_ACCUMULATION', 1.0),
+                            "RECOVERY": get_env_float('HOUR_FACTOR_RECOVERY', 0.6),
+                            "PEAK 1": get_env_float('HOUR_FACTOR_INTENSIFICATION', 0.9),
+                            "PEAK 2": get_env_float('HOUR_FACTOR_INTENSIFICATION', 0.9),
+                            "TAPER 1": get_env_float('HOUR_FACTOR_REALIZATION', 0.7),
+                            "TAPER 2": get_env_float('HOUR_FACTOR_REALIZATION', 0.7),
+                            "MAINTENANCE": get_env_float('HOUR_FACTOR_MAINTENANCE', 0.8)
+                        }
+
+                        hour_factor = hour_factors.get(week_type, 1.0)
+                        budget_hours = base_budget_hours * hour_factor
+
                         time_status = "✅" if weekly_hours <= budget_hours else ("⚠️" if weekly_hours <= budget_hours * 1.1 else "🚨")
 
                         # Enhanced week summary with additional information
                         hours_info = f"{weekly_hours:.1f}h planned"
-                        budget_info = f"Max: {budget_hours}h"
+                        budget_info = f"Max: {budget_hours:.1f}h"
                         percentage = (weekly_hours / budget_hours * 100) if budget_hours > 0 else 0
                         utilization = f"({percentage:.0f}%)"
 
@@ -2937,7 +3050,11 @@ def fitness_state(days, detailed):
 
         table.add_row("Readiness Score", f"{readiness:.1f}%", "🟢 High" if readiness > 70 else "🟡 Moderate" if readiness > 40 else "🔴 Low")
         table.add_row("Performance Potential", f"{perf_potential:.3f}", "🎯 Optimal" if perf_potential > 0.8 else "📊 Good")
-        table.add_row("Overtraining Risk", "YES" if overtraining else "NO", "⚠️ CAUTION" if overtraining else "✅ SAFE")
+        # Show precise risk state instead of binary overtraining flag
+        risk_state = latest.get('risk_state', 'SAFE')
+        risk_display = risk_state.replace('_', ' ').title()
+        risk_status = "⚠️ REST NEEDED" if risk_state == "NON_FUNCTIONAL_OVERREACHING" else ("🟡 RECOVERY" if risk_state == "HIGH_STRAIN" else "✅ SAFE")
+        table.add_row("Risk State", risk_display, risk_status)
 
         console.print(table)
 

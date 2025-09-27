@@ -9,6 +9,7 @@ This module provides:
 """
 
 import logging
+import os
 import numpy as np
 import pandas as pd
 from datetime import datetime, timedelta, timezone
@@ -285,7 +286,7 @@ class TrainingPlanGenerator:
 
         # Create detailed daily workouts
         daily_workouts = self._create_daily_workouts(
-            mesocycle, optimized_loads, duration_days, strength_days
+            mesocycles, optimized_loads, duration_days, strength_days
         )
 
         # Simulate physiological response
@@ -294,9 +295,12 @@ class TrainingPlanGenerator:
         )
 
         # Add recovery and adaptation periods
-        final_plan = self._add_recovery_periods(
+        raw_plan = self._add_recovery_periods(
             daily_workouts, simulated_response
         )
+
+        # CRITICAL: Plan validation layer (Generate->Validate->Present architecture)
+        final_plan = self._validate_and_fix_plan(raw_plan)
 
         # Generate visualizations
         visualizations = self._create_visualizations(
@@ -396,46 +400,79 @@ class TrainingPlanGenerator:
     ) -> Mesocycle:
         """Create a 4-week mesocycle structure."""
 
-        # Define load patterns for each mesocycle type (implementing 3:1 and 4:1 periodization)
+        # Read mesocycle configurations from environment, with defaults
+        def get_env_loads(key: str, default: list) -> list:
+            loads_str = os.getenv(key, '')
+            if loads_str:
+                try:
+                    return [float(x.strip()) for x in loads_str.split(',')]
+                except:
+                    pass
+            return default
+
+        def get_env_float(key: str, default: float) -> float:
+            try:
+                return float(os.getenv(key, str(default)))
+            except:
+                return default
+
+        # Define load patterns for each mesocycle type from environment or defaults
+        # Load percentages are relative to base weekly TSS
         patterns = {
             MesocycleType.ADAPTATION: {
-                'loads': [60, 70, 80, 45],  # Classic 3:1 - build, build, build, recover
+                'loads': get_env_loads('MESOCYCLE_ADAPTATION_LOADS', [70, 80, 90, 60]),
                 'pattern': '3:1',
-                'easy': 0.75, 'moderate': 0.20, 'hard': 0.05  # Predominantly aerobic
+                'easy': get_env_float('MESOCYCLE_ADAPTATION_EASY', 0.60),
+                'moderate': get_env_float('MESOCYCLE_ADAPTATION_MODERATE', 0.30),
+                'hard': get_env_float('MESOCYCLE_ADAPTATION_HARD', 0.10)
             },
             MesocycleType.ACCUMULATION: {
-                'loads': [75, 85, 95, 50],  # 3:1 high volume progression
+                'loads': get_env_loads('MESOCYCLE_ACCUMULATION_LOADS', [80, 90, 100, 60]),
                 'pattern': '3:1',
-                'easy': 0.70, 'moderate': 0.25, 'hard': 0.05  # Volume focus
+                'easy': get_env_float('MESOCYCLE_ACCUMULATION_EASY', 0.50),
+                'moderate': get_env_float('MESOCYCLE_ACCUMULATION_MODERATE', 0.35),
+                'hard': get_env_float('MESOCYCLE_ACCUMULATION_HARD', 0.15)
             },
             MesocycleType.INTENSIFICATION: {
-                'loads': [70, 75, 80, 85, 45],  # 4:1 pattern for intensity
-                'pattern': '4:1',
-                'easy': 0.60, 'moderate': 0.25, 'hard': 0.15  # Higher intensity ratio
+                'loads': get_env_loads('MESOCYCLE_INTENSIFICATION_LOADS', [75, 85, 90, 55]),
+                'pattern': '3:1',
+                'easy': get_env_float('MESOCYCLE_INTENSIFICATION_EASY', 0.40),
+                'moderate': get_env_float('MESOCYCLE_INTENSIFICATION_MODERATE', 0.35),
+                'hard': get_env_float('MESOCYCLE_INTENSIFICATION_HARD', 0.25)
             },
             MesocycleType.REALIZATION: {
-                'loads': [70, 55, 40, 25],  # Progressive taper
+                'loads': get_env_loads('MESOCYCLE_REALIZATION_LOADS', [70, 55, 40, 25]),
                 'pattern': 'taper',
-                'easy': 0.70, 'moderate': 0.20, 'hard': 0.10  # Maintain sharpness
+                'easy': get_env_float('MESOCYCLE_REALIZATION_EASY', 0.70),
+                'moderate': get_env_float('MESOCYCLE_REALIZATION_MODERATE', 0.20),
+                'hard': get_env_float('MESOCYCLE_REALIZATION_HARD', 0.10)
             },
             MesocycleType.RECOVERY: {
-                'loads': [30, 45, 60, 50],  # Structured recovery: Deep -> Active -> Base Building -> Test
+                'loads': get_env_loads('MESOCYCLE_RECOVERY_LOADS', [40, 30, 45, 35]),
                 'pattern': 'structured_recovery',
-                'easy': 0.85, 'moderate': 0.15, 'hard': 0.0  # Recovery focused
+                'easy': get_env_float('MESOCYCLE_RECOVERY_EASY', 1.0),
+                'moderate': get_env_float('MESOCYCLE_RECOVERY_MODERATE', 0.0),
+                'hard': get_env_float('MESOCYCLE_RECOVERY_HARD', 0.0)
             },
             MesocycleType.MAINTENANCE: {
-                'loads': [65, 65, 65, 50],  # Stable with recovery
+                'loads': get_env_loads('MESOCYCLE_MAINTENANCE_LOADS', [65, 65, 65, 50]),
                 'pattern': '3:1',
-                'easy': 0.75, 'moderate': 0.20, 'hard': 0.05  # Maintenance focus
+                'easy': get_env_float('MESOCYCLE_MAINTENANCE_EASY', 0.75),
+                'moderate': get_env_float('MESOCYCLE_MAINTENANCE_MODERATE', 0.20),
+                'hard': get_env_float('MESOCYCLE_MAINTENANCE_HARD', 0.05)
             }
         }
 
         pattern = patterns[cycle_type]
 
+        # CRITICAL FIX: Use duration from constraints, not hard-coded 28 days
+        duration_weeks = constraints.get('duration_weeks', 4)
+        duration_days = duration_weeks * 7
+
         return Mesocycle(
             cycle_type=cycle_type,
             start_date=start_date,
-            end_date=start_date + timedelta(days=28),
+            end_date=start_date + timedelta(days=duration_days-1),  # Inclusive end date
             weeks=[],  # Will be populated with workouts
             weekly_loads=pattern['loads'],
             load_pattern=pattern['pattern'],
@@ -465,7 +502,9 @@ class TrainingPlanGenerator:
         constraints = constraints or {}
 
         # PHYSIOLOGICAL CONSTRAINTS - Critical for safe training progression
-        MAX_DAILY_TSS = 400          # Maximum daily TSS for elite athletes
+        MAX_DAILY_TSS = self.config.MAX_DAILY_LOAD  # Use configured maximum (default 1000)
+        SAFE_DAILY_TSS = 250         # Safe daily maximum for sustained training
+        EXTREME_DAILY_TSS = 400      # Only for race simulation or key sessions
         MAX_WEEKLY_TSS_INCREASE = 50 # Maximum weekly TSS increase (7 CTL points)
         MAX_CTL_RAMP_RATE = 7        # Maximum CTL increase per week
         MIN_RECOVERY_RATIO = 0.3     # Minimum ratio of easy days to total training days
@@ -495,16 +534,47 @@ class TrainingPlanGenerator:
             if actual_weekday in configured_strength_days:
                 strength_days.append(day_offset)
 
-        # Get max weekly hours constraint
-        max_weekly_hours = constraints.get('max_weekly_hours', 14)
+        # Get max weekly hours constraint with mesocycle-specific reduction factors
+        base_max_weekly_hours = constraints.get('max_weekly_hours', 14)
+
+        # Apply mesocycle-specific hour reduction factors for better periodization
+        # These can be configured via environment variables
+        def get_env_float(key: str, default: float) -> float:
+            try:
+                return float(os.getenv(key, str(default)))
+            except:
+                return default
+
+        hour_reduction_factors = {
+            MesocycleType.ADAPTATION: get_env_float('HOUR_FACTOR_ADAPTATION', 1.0),
+            MesocycleType.ACCUMULATION: get_env_float('HOUR_FACTOR_ACCUMULATION', 1.0),
+            MesocycleType.INTENSIFICATION: get_env_float('HOUR_FACTOR_INTENSIFICATION', 0.9),
+            MesocycleType.REALIZATION: get_env_float('HOUR_FACTOR_REALIZATION', 0.7),
+            MesocycleType.RECOVERY: get_env_float('HOUR_FACTOR_RECOVERY', 0.6),
+            MesocycleType.MAINTENANCE: get_env_float('HOUR_FACTOR_MAINTENANCE', 0.8)
+        }
+
+        # For multi-mesocycle plans, use the first mesocycle's factor as the base
+        # Individual weeks will be adjusted based on their specific mesocycle
+        max_weekly_hours = base_max_weekly_hours  # Will be adjusted per mesocycle later
 
         # FIXED: Create load distribution across all mesocycles
         daily_loads = np.zeros(duration_days)
 
         # PHYSIOLOGICAL BASE: Start from current fitness level (CTL)
-        # Elite athletes: use current CTL * 7 as sustainable weekly TSS baseline
+        # Calculate sustainable weekly TSS based on current CTL
+        # Standard formula: Weekly TSS = CTL * 7 * intensity_factor
+        # Where intensity_factor is typically 0.8-1.2 for sustainable training
         current_ctl = self.current_fitness
-        base_weekly_tss = min(current_ctl * 7, max_weekly_hours * 60)  # Respect time budget constraints
+
+        # More conservative calculation for sustainable weekly TSS
+        # Use CTL * 5-6 for sustainable base (not CTL * 7 which is too aggressive)
+        intensity_factor = 0.85  # Conservative factor for sustainability
+        base_weekly_tss = min(
+            current_ctl * 5.5 * intensity_factor,  # More conservative than * 7
+            max_weekly_hours * 60,  # Respect time budget constraints
+            1200  # Absolute cap for safety (even for elite athletes)
+        )
 
         self.logger.info(f"Base weekly TSS: {base_weekly_tss:.0f} (from CTL: {current_ctl:.1f}, max hours: {max_weekly_hours})")
 
@@ -528,9 +598,15 @@ class TrainingPlanGenerator:
                     max_allowed_increase = previous_week_tss + MAX_WEEKLY_TSS_INCREASE
                     target_weekly_tss = min(target_weekly_tss, max_allowed_increase)
 
+                # Apply mesocycle-specific hour reduction factor
+                mesocycle_hour_factor = hour_reduction_factors[mesocycle.cycle_type]
+                mesocycle_max_weekly_hours = base_max_weekly_hours * mesocycle_hour_factor
+
                 # CONSTRAINT: Cap absolute maximum weekly TSS
                 max_weekly_tss = MAX_DAILY_TSS * 7 * 0.6  # 60% loading across 7 days
-                target_weekly_tss = min(target_weekly_tss, max_weekly_tss)
+                # Also constrain by mesocycle-specific hour limit
+                max_weekly_tss_by_hours = mesocycle_max_weekly_hours * 60  # Convert hours to TSS
+                target_weekly_tss = min(target_weekly_tss, max_weekly_tss, max_weekly_tss_by_hours)
 
                 weekly_targets.append(target_weekly_tss)
                 previous_week_tss = target_weekly_tss
@@ -555,16 +631,33 @@ class TrainingPlanGenerator:
                     [day - week_start for day in rest_days if week_start <= day < week_end]
                 )
 
-                # Assign to daily_loads with PHYSIOLOGICAL CONSTRAINTS
+                # Assign to daily_loads with CRITICAL SAFETY CONSTRAINTS
                 for i, load in enumerate(week_loads):
                     if week_start + i < duration_days:
-                        # CONSTRAINT: Cap daily TSS at physiological maximum
-                        constrained_load = min(load, MAX_DAILY_TSS)
+                        original_load = load
+
+                        # CRITICAL SAFETY: Multi-tier load constraints to prevent dangerous spikes
+                        # Tier 1: Safe daily limit for 90% of training
+                        if load > SAFE_DAILY_TSS:
+                            constrained_load = SAFE_DAILY_TSS
+                            constraint_reason = f"SAFE_LIMIT ({SAFE_DAILY_TSS})"
+
+                            # Tier 2: Allow extreme sessions max 1x per week for key workouts
+                            day_of_week = (week_start + i) % 7
+                            if day_of_week in [2, 5] and load <= EXTREME_DAILY_TSS:  # Tue/Sat only
+                                constrained_load = min(load, EXTREME_DAILY_TSS)
+                                constraint_reason = f"EXTREME_SESSION ({EXTREME_DAILY_TSS})"
+                        else:
+                            constrained_load = load
+
+                        # Tier 3: Absolute physiological maximum (emergency brake)
+                        constrained_load = min(constrained_load, MAX_DAILY_TSS)
+
                         daily_loads[week_start + i] = constrained_load
 
-                        # Log if capping occurred
-                        if constrained_load < load:
-                            self.logger.warning(f"Day {week_start + i}: Capped TSS from {load:.0f} to {constrained_load:.0f}")
+                        # Log safety interventions
+                        if constrained_load < original_load:
+                            self.logger.warning(f"SAFETY: Day {week_start + i + 1}: Capped dangerous load {original_load:.0f} → {constrained_load:.0f} TSS ({constraint_reason})")
 
             # Move to next mesocycle (typically 4 weeks = 28 days)
             day_offset += len(weekly_load_factors) * 7
@@ -603,9 +696,12 @@ class TrainingPlanGenerator:
 
         # POLARIZED INTENSITY DISTRIBUTION based on sports science
         if mesocycle.cycle_type == MesocycleType.RECOVERY:
-            # Recovery week: all easy - maintain polarized approach even in recovery
+            # CRITICAL FIX: Recovery week - cap daily loads much lower
+            max_daily_recovery_load = 50  # Maximum 50 TSS per day in recovery weeks
+            daily_recovery_load = min(weekly_target_load / len(available_days), max_daily_recovery_load)
+
             for day in available_days:
-                loads[day] = weekly_target_load / len(available_days)
+                loads[day] = daily_recovery_load
         else:
             # POLARIZED MODEL: Schedule intensity days strategically
             # Key principle: Only 1-2 hard days per week maximum
@@ -671,12 +767,18 @@ class TrainingPlanGenerator:
         return loads
 
     def _apply_dynamic_load_scaling(self, base_loads: np.ndarray, strength_days: List[int] = None) -> np.ndarray:
-        """Apply dynamic load scaling based on predicted daily readiness.
+        """Apply dynamic load scaling based on predicted daily readiness and health anomalies.
 
         REQUIREMENT 2: Implements intelligent daily load adjustments.
         Uses predicted Form (TSB) to modulate daily training loads.
         Higher form = slightly higher loads, lower form = reduced loads.
+
+        CRITICAL FIX: Now includes health anomaly detection and automatic training adjustment.
         """
+        # Import here to avoid circular imports
+        from .garmin_scores_analyzer import GarminScoresAnalyzer
+        from datetime import datetime, timedelta, timezone
+
         # First, predict the form progression with base loads
         t = np.arange(len(base_loads))
         predicted_fitness, predicted_fatigue, predicted_performance = self.ff_model.calculate_fitness_fatigue(
@@ -691,25 +793,75 @@ class TrainingPlanGenerator:
         # Apply readiness modifiers based on predicted form
         adjusted_loads = np.zeros_like(base_loads)
 
+        # Initialize wellness analyzer for health anomaly detection
+        wellness_analyzer = GarminScoresAnalyzer(user_id=self.user_id)
+
         for day in range(len(base_loads)):
+            # Calculate the date for this day in the plan
+            plan_date = datetime.now(timezone.utc) + timedelta(days=day)
+
+            # CRITICAL FIX: Check for health anomalies and apply load modifiers
+            wellness_modifier = 1.0
+            try:
+                # Get wellness-based training load modifier
+                wellness_modifier = wellness_analyzer.get_training_load_modifier(plan_date)
+
+                # Get detailed readiness for anomaly detection
+                readiness_data = wellness_analyzer.get_readiness_score(plan_date)
+                if readiness_data['readiness_score'] is not None:
+                    readiness_score = readiness_data['readiness_score']
+
+                    # Detect critical health anomalies (sleep score < 50, HRV < 30, etc.)
+                    critical_anomalies = []
+                    if 'sleep' in readiness_data['components']:
+                        sleep_score = readiness_data['components']['sleep']['score']
+                        if sleep_score < 50:  # Poor sleep like mentioned 48.0
+                            critical_anomalies.append(f"Poor sleep (score: {sleep_score:.1f})")
+
+                    if 'hrv' in readiness_data['components']:
+                        hrv_score = readiness_data['components']['hrv']['score']
+                        if hrv_score < 30:  # Very low HRV
+                            critical_anomalies.append(f"Low HRV (score: {hrv_score:.1f})")
+
+                    if 'stress' in readiness_data['components']:
+                        stress_score = readiness_data['components']['stress']['score']
+                        if stress_score < 25:  # Very high stress (inverted)
+                            critical_anomalies.append(f"High stress levels")
+
+                    # Force recovery when critical anomalies detected
+                    if critical_anomalies and readiness_score < 40:
+                        wellness_modifier = 0.3  # Reduce to 30% of planned load
+                        self.logger.warning(f"HEALTH ANOMALY DAY {day+1}: {', '.join(critical_anomalies)} - Reducing load to {wellness_modifier*100}%")
+                    elif critical_anomalies:
+                        wellness_modifier = min(wellness_modifier, 0.6)  # Cap at 60% when anomalies present
+                        self.logger.info(f"Health concerns on Day {day+1}: {', '.join(critical_anomalies)} - Load capped at 60%")
+
+            except Exception as e:
+                self.logger.debug(f"Wellness data unavailable for Day {day+1}: {e}")
+                wellness_modifier = 1.0  # Default to no modification if data unavailable
+
             # Calculate readiness modifier based on predicted form
             # Formula: modifier = 1.0 + (predicted_form / 100)
             # This gives a range roughly 0.5 to 1.5 for typical form values (-50 to +50)
             form_value = predicted_form[day]
-            readiness_modifier = 1.0 + (form_value / 100.0)
+            form_readiness_modifier = 1.0 + (form_value / 100.0)
 
-            # Clamp modifier to reasonable bounds (0.5 to 1.2)
-            readiness_modifier = max(0.5, min(1.2, readiness_modifier))
+            # Clamp form modifier to reasonable bounds (0.5 to 1.2)
+            form_readiness_modifier = max(0.5, min(1.2, form_readiness_modifier))
+
+            # Combine form-based and wellness-based modifiers (take the more conservative)
+            combined_modifier = min(form_readiness_modifier, wellness_modifier)
 
             # Apply modifier to base load
-            adjusted_loads[day] = base_loads[day] * readiness_modifier
+            adjusted_loads[day] = base_loads[day] * combined_modifier
 
             # Special handling for rest days and mandatory strength days
             if base_loads[day] == 0:  # Rest day
                 adjusted_loads[day] = 0
             elif self._is_strength_day(day, strength_days or []):  # Tuesday strength training
-                # Strength training gets fixed load regardless of form
-                adjusted_loads[day] = max(40, adjusted_loads[day])  # Minimum effective strength load
+                # Strength training gets fixed load regardless of form, but still respect health anomalies
+                min_strength_load = 40 * min(wellness_modifier, 1.0)  # Scale minimum by wellness
+                adjusted_loads[day] = max(min_strength_load, adjusted_loads[day])
 
         return adjusted_loads
 
@@ -721,7 +873,7 @@ class TrainingPlanGenerator:
 
     def _create_daily_workouts(
         self,
-        mesocycle: Mesocycle,
+        mesocycles: List[object],  # Changed to accept multiple mesocycles
         loads: np.ndarray,
         duration_days: int = 30,
         strength_days: List[int] = None
@@ -737,20 +889,53 @@ class TrainingPlanGenerator:
         # REQUIREMENT 2: Dynamic load scaling based on predicted daily readiness
         adjusted_loads = self._apply_dynamic_load_scaling(loads, strength_days)
 
+        # CRITICAL FIX: Use consistent start date for chronological sequence
+        plan_start_date = mesocycles[0].start_date
+
+        # CRITICAL FIX: Calculate which mesocycle each day belongs to
+        def get_mesocycle_for_day(day_num: int) -> object:
+            """Determine which mesocycle a specific day belongs to."""
+            current_day = 0
+            for mesocycle in mesocycles:
+                mesocycle_duration = (mesocycle.end_date - mesocycle.start_date).days + 1
+                if current_day <= day_num < current_day + mesocycle_duration:
+                    return mesocycle
+                current_day += mesocycle_duration
+            # Fallback to last mesocycle if day exceeds planned duration
+            return mesocycles[-1]
+
         for day in range(duration_days):
-            date = mesocycle.start_date + timedelta(days=day)
+            date = plan_start_date + timedelta(days=day)
             week_num = day // 7 + 1
 
-            # Determine workout type based on adjusted load and day
-            workout_type = self._determine_workout_type(
-                adjusted_loads[day], day % 7, week_num
-            )
+            # CRITICAL FIX: Get the correct mesocycle for this specific day
+            current_mesocycle = get_mesocycle_for_day(day)
+
+            # SPORTS SCIENCE FIX: Use mesocycle plan as single source of truth
+            # For RECOVERY mesocycles, force appropriate workout types immediately
+            if current_mesocycle.cycle_type == MesocycleType.RECOVERY:
+                if adjusted_loads[day] == 0:
+                    workout_type = WorkoutType.REST
+                else:
+                    # ALL recovery week workouts are RECOVERY type - no exceptions
+                    workout_type = WorkoutType.RECOVERY
+                    # Cap recovery loads to appropriate range (30-50 TSS max)
+                    adjusted_loads[day] = min(50, adjusted_loads[day])
+            else:
+                # For non-recovery weeks, use build/peak phase logic
+                workout_type = self._suggest_workout_type_for_build_phase(
+                    adjusted_loads[day], day % 7, week_num, current_mesocycle.cycle_type
+                )
 
             # Create workout structure with dynamically adjusted load
+            # CRITICAL FIX: Day numbering starts from 1, not 0
             workout = self._create_workout_structure(
-                date, day, week_num, mesocycle.cycle_type,
+                date, day + 1, week_num, current_mesocycle.cycle_type,
                 workout_type, adjusted_loads[day], strength_days
             )
+
+            # Track which mesocycle this workout belongs to for debugging
+            workout.mesocycle_type = current_mesocycle.cycle_type
 
             # Add second session logic
             self._add_second_session_if_appropriate(
@@ -763,6 +948,10 @@ class TrainingPlanGenerator:
                 strength_last_day = day
 
             workouts.append(workout)
+
+        # Apply mesocycle intensity distribution to override workout intensities
+        # CRITICAL FIX: Apply intensity distribution for each mesocycle separately
+        self._apply_intensity_distribution_by_mesocycle(workouts, mesocycles)
 
         # Apply weekly time budget constraints
         self._apply_weekly_time_budget(workouts, weekly_time_budget_min)
@@ -787,19 +976,88 @@ class TrainingPlanGenerator:
 
         # Apply sport-specific load multipliers
         sport_multiplier = self.load_multipliers.get(primary_sport, 1.0)
+
+        # Apply sport multipliers normally
         adjusted_load = load * sport_multiplier
+
+        # CRITICAL SAFETY: Apply final load constraints even after sport multipliers
+        # This prevents sport multipliers from creating dangerous spikes
+        SAFE_WORKOUT_LIMIT = 250
+        EXTREME_WORKOUT_LIMIT = 400
+
+        if adjusted_load > SAFE_WORKOUT_LIMIT:
+            original_adjusted = adjusted_load
+            # Allow extreme workouts only on key training days (Tue/Sat)
+            day_of_week = date.weekday()
+            if day_of_week in [1, 5] and adjusted_load <= EXTREME_WORKOUT_LIMIT:  # Tue/Sat
+                # Keep extreme load but log it
+                self.logger.warning(f"EXTREME WORKOUT: {date.strftime('%Y-%m-%d')} {primary_sport} - {adjusted_load:.0f} TSS")
+            else:
+                # Cap at safe limit
+                adjusted_load = SAFE_WORKOUT_LIMIT
+                self.logger.warning(f"SAFETY CAP: {date.strftime('%Y-%m-%d')} {primary_sport} - Reduced {original_adjusted:.0f} → {adjusted_load:.0f} TSS")
 
         # Calculate duration based on load and workout type
         duration = self._calculate_duration(adjusted_load, workout_type)
 
+        # Apply activity-specific maximum duration limits with mesocycle modifiers
+        sport_max_duration = self.config.get_sport_max_duration(primary_sport)
+        mesocycle_duration_multiplier = self.config.get_mesocycle_duration_multiplier(mesocycle_type.value)
+
+        # Calculate final max duration with mesocycle reduction
+        final_max_duration = int(sport_max_duration * mesocycle_duration_multiplier)
+
+        # Apply the duration limit
+        if duration > final_max_duration:
+            original_duration = duration
+            duration = final_max_duration
+            self.logger.info(f"DURATION CAP: {primary_sport} {mesocycle_type.value} - "
+                           f"Reduced {original_duration} → {duration} min "
+                           f"(Max: {sport_max_duration}m × {mesocycle_duration_multiplier:.1f})")
+
+        # Apply legacy mesocycle-specific duration reduction for backward compatibility
+        def get_env_float(key: str, default: float) -> float:
+            try:
+                return float(os.getenv(key, str(default)))
+            except:
+                return default
+
+        # Additional duration reduction factors for different mesocycle types
+        duration_reduction_factors = {
+            MesocycleType.RECOVERY: get_env_float('DURATION_FACTOR_RECOVERY', 0.7),  # 30% shorter
+            MesocycleType.REALIZATION: get_env_float('DURATION_FACTOR_REALIZATION', 0.8),  # 20% shorter
+            MesocycleType.MAINTENANCE: get_env_float('DURATION_FACTOR_MAINTENANCE', 0.9),  # 10% shorter
+        }
+
+        if mesocycle_type in duration_reduction_factors:
+            duration_factor = duration_reduction_factors[mesocycle_type]
+            duration = int(duration * duration_factor)
+
+        # Ensure minimum duration for non-rest workouts
+        if workout_type != WorkoutType.REST and duration < 15:
+            duration = 15
+
+        # CRITICAL CONSISTENCY CHECK: Ensure load=0 means duration=0 and vice versa
+        if adjusted_load == 0:
+            duration = 0
+            workout_type = WorkoutType.REST
+        elif duration == 0 and adjusted_load > 0:
+            # This should not happen, but fix it if it does
+            self.logger.error(f"INCONSISTENCY FIXED: Load {adjusted_load} with 0 duration - setting to REST")
+            adjusted_load = 0
+            workout_type = WorkoutType.REST
+
         # Create workout structure
-        structure = self._build_workout_structure(workout_type, duration, load)
+        structure = self._build_workout_structure(workout_type, duration, adjusted_load)
 
         # Calculate physiological targets
         hr_zones = self._calculate_hr_zones(workout_type)
 
         # Determine recovery needs
         recovery_hours = self._calculate_recovery_needs(load, workout_type)
+
+        # Intensity level determined by workout type (already correct due to mesocycle-first logic)
+        intensity_level = self._get_intensity_level(workout_type)
 
         return WorkoutPlan(
             date=date,
@@ -810,7 +1068,7 @@ class TrainingPlanGenerator:
             primary_sport=primary_sport,
             alternative_sports=alternatives,
             planned_load=adjusted_load,
-            intensity_level=self._get_intensity_level(workout_type),
+            intensity_level=intensity_level,
             hr_zones=hr_zones,
             total_duration_min=duration,
             warmup_min=structure['warmup'],
@@ -896,13 +1154,32 @@ class TrainingPlanGenerator:
     ) -> List[WorkoutPlan]:
         """Add strategic recovery periods based on simulated response."""
 
+        # CRITICAL FIX: Don't override mesocycle-based recovery periods
+        # Check if we already have proper RECOVERY mesocycle weeks
+        recovery_weeks_present = any(
+            w.mesocycle_type == MesocycleType.RECOVERY for w in workouts
+            if hasattr(w, 'mesocycle_type')
+        )
+
+        if recovery_weeks_present:
+            # We already have proper mesocycle-based recovery periods
+            # Only apply minimal individual workout adjustments
+            overtraining_days = np.where(response['overtraining_risk'])[0]
+            for day in overtraining_days:
+                if day < len(workouts) and workouts[day].mesocycle_type != MesocycleType.RECOVERY:
+                    # Only modify non-recovery week workouts
+                    workouts[day].planned_load *= 0.7
+                    workouts[day].description += " (load reduced for overtraining risk)"
+            return workouts
+
         # Identify high-risk periods
         overtraining_days = np.where(response['overtraining_risk'])[0]
         low_recovery_days = np.where(response['overall_recovery'] < 60)[0]
 
-        # Check for sustained overtraining requiring structured recovery mesocycle
-        if len(overtraining_days) > 3:
-            return self._create_recovery_mesocycle(workouts, overtraining_days)
+        # DISABLED: Legacy recovery mesocycle system that creates inappropriate intensity work
+        # The mesocycle-based recovery system already handles this properly
+        # if len(overtraining_days) > 3:
+        #     return self._create_recovery_mesocycle(workouts, overtraining_days)
 
         # Standard recovery modifications for isolated overtraining days
         for day in overtraining_days:
@@ -1127,25 +1404,26 @@ class TrainingPlanGenerator:
         remaining_weeks = weeks_needed
 
         cycle_count = 0
+        total_weeks_planned = 0
+
         while remaining_weeks > 0:
             cycle_count += 1
 
-            # Determine mesocycle type based on position in sequence
-            if cycle_count == 1:
-                # First cycle: Use intelligent selection
-                mesocycle_type = self._intelligent_mesocycle_selection(goal, target_event_date)
-            elif remaining_weeks <= 4:
-                # Final cycle: Peak or Recovery based on goal
-                if goal in ['performance', 'peak']:
-                    mesocycle_type = MesocycleType.REALIZATION  # Peak performance
-                else:
-                    mesocycle_type = MesocycleType.RECOVERY
+            # SPORTS SCIENCE: Implement proper 3:1 periodization
+            # Alternate between 3-week build blocks and 1-week recovery blocks
+            if cycle_count % 2 == 0:
+                # Even cycles: 1-week RECOVERY mesocycles
+                mesocycle_type = MesocycleType.RECOVERY
+                cycle_weeks = min(1, remaining_weeks)
             else:
-                # Middle cycles: Progressive build
-                mesocycle_type = MesocycleType.ACCUMULATION  # Build phase
-
-            # Create mesocycle (4 weeks max per cycle)
-            cycle_weeks = min(4, remaining_weeks)
+                # Odd cycles: 3-week BUILD mesocycles
+                if total_weeks_planned < 8:
+                    mesocycle_type = MesocycleType.ADAPTATION  # Base building first
+                elif remaining_weeks <= 4 and goal in ['performance', 'peak']:
+                    mesocycle_type = MesocycleType.REALIZATION  # Peak phase
+                else:
+                    mesocycle_type = MesocycleType.ACCUMULATION  # Volume building
+                cycle_weeks = min(3, remaining_weeks)
             mesocycle = self._create_mesocycle(
                 mesocycle_type,
                 current_date,
@@ -1157,6 +1435,7 @@ class TrainingPlanGenerator:
             # Move to next cycle
             current_date = current_date + timedelta(weeks=cycle_weeks)
             remaining_weeks -= cycle_weeks
+            total_weeks_planned += cycle_weeks
 
         return mesocycles
 
@@ -1304,13 +1583,19 @@ class TrainingPlanGenerator:
         return goals.get(cycle_type, "General fitness improvement")
 
 
-    def _determine_workout_type(
+    def _suggest_workout_type_for_build_phase(
         self,
         load: float,
         day_of_week: int,
-        week_num: int
+        week_num: int,
+        mesocycle_type: MesocycleType = None
     ) -> WorkoutType:
-        """Determine workout type based on load and schedule with proper intensity variation."""
+        """Suggest workout type for BUILD/PEAK phases based on load and schedule.
+
+        Note: RECOVERY mesocycles are handled separately to ensure proper sports science compliance.
+        """
+
+        # This function only handles BUILD/PEAK phases - RECOVERY handled at higher level
         if load == 0:
             return WorkoutType.REST
         elif load < 25:
@@ -1402,7 +1687,8 @@ class TrainingPlanGenerator:
 
     def _calculate_duration(self, load: float, workout_type: WorkoutType) -> int:
         """Calculate realistic workout duration from load and type."""
-        if load == 0:
+        # CRITICAL: Ensure perfect load/duration consistency
+        if load == 0 or workout_type == WorkoutType.REST:
             return 0
 
         # FIXED: More realistic TSS to duration conversion
@@ -1411,16 +1697,16 @@ class TrainingPlanGenerator:
 
         # FIXED: Use configured duration multipliers from .env
         duration_multipliers = {
-            WorkoutType.REST: config.DURATION_MULTIPLIERS["REST"],
-            WorkoutType.RECOVERY: config.DURATION_MULTIPLIERS["RECOVERY"],
-            WorkoutType.AEROBIC: config.DURATION_MULTIPLIERS["AEROBIC"],
-            WorkoutType.TEMPO: config.DURATION_MULTIPLIERS["TEMPO"],
-            WorkoutType.THRESHOLD: config.DURATION_MULTIPLIERS["THRESHOLD"],
-            WorkoutType.VO2MAX: config.DURATION_MULTIPLIERS["VO2MAX"],
-            WorkoutType.NEUROMUSCULAR: config.DURATION_MULTIPLIERS["NEUROMUSCULAR"],
-            WorkoutType.LONG: config.DURATION_MULTIPLIERS["LONG"],
-            WorkoutType.INTERVALS: config.DURATION_MULTIPLIERS["INTERVALS"],
-            WorkoutType.FARTLEK: config.DURATION_MULTIPLIERS["FARTLEK"]
+            WorkoutType.REST: self.config.DURATION_MULTIPLIERS["REST"],
+            WorkoutType.RECOVERY: self.config.DURATION_MULTIPLIERS["RECOVERY"],
+            WorkoutType.AEROBIC: self.config.DURATION_MULTIPLIERS["AEROBIC"],
+            WorkoutType.TEMPO: self.config.DURATION_MULTIPLIERS["TEMPO"],
+            WorkoutType.THRESHOLD: self.config.DURATION_MULTIPLIERS["THRESHOLD"],
+            WorkoutType.VO2MAX: self.config.DURATION_MULTIPLIERS["VO2MAX"],
+            WorkoutType.NEUROMUSCULAR: self.config.DURATION_MULTIPLIERS["NEUROMUSCULAR"],
+            WorkoutType.LONG: self.config.DURATION_MULTIPLIERS["LONG"],
+            WorkoutType.INTERVALS: self.config.DURATION_MULTIPLIERS["INTERVALS"],
+            WorkoutType.FARTLEK: self.config.DURATION_MULTIPLIERS["FARTLEK"]
         }
 
         multiplier = duration_multipliers.get(workout_type, 1.0)
@@ -1523,12 +1809,12 @@ class TrainingPlanGenerator:
         intensity_map = {
             WorkoutType.REST: "rest",
             WorkoutType.RECOVERY: "easy",
-            WorkoutType.AEROBIC: "easy",
+            WorkoutType.AEROBIC: "easy",  # CRITICAL: Aerobic is ALWAYS easy
             WorkoutType.TEMPO: "moderate",
             WorkoutType.THRESHOLD: "hard",
             WorkoutType.VO2MAX: "peak",
             WorkoutType.NEUROMUSCULAR: "peak",
-            WorkoutType.LONG: "moderate",
+            WorkoutType.LONG: "easy",  # FIXED: Long sessions should be easy/moderate
             WorkoutType.INTERVALS: "hard",
             WorkoutType.FARTLEK: "variable"
         }
@@ -1539,19 +1825,52 @@ class TrainingPlanGenerator:
         workout_type: WorkoutType,
         sport: str
     ) -> str:
-        """Generate descriptive workout title."""
-        titles = {
-            WorkoutType.REST: "Rest Day",
-            WorkoutType.RECOVERY: f"Recovery {sport}",
-            WorkoutType.AEROBIC: f"Aerobic {sport}",
-            WorkoutType.TEMPO: f"Tempo {sport}",
-            WorkoutType.THRESHOLD: f"Threshold {sport}",
-            WorkoutType.VO2MAX: f"VO2max {sport}",
-            WorkoutType.LONG: f"Long {sport}",
-            WorkoutType.INTERVALS: f"{sport} Intervals",
-            WorkoutType.FARTLEK: f"Fartlek {sport}"
-        }
-        return titles.get(workout_type, f"{sport} Workout")
+        """Generate descriptive workout title with proper sport-specific terminology."""
+
+        # Sport-specific naming for running
+        if sport.lower() == "run":
+            run_titles = {
+                WorkoutType.REST: "Rest Day",
+                WorkoutType.RECOVERY: "Recovery Run",
+                WorkoutType.AEROBIC: "Long Run",
+                WorkoutType.TEMPO: "Tempo Run",
+                WorkoutType.THRESHOLD: "Interval Training Run",
+                WorkoutType.VO2MAX: "Interval Training Run",
+                WorkoutType.LONG: "Long Run",
+                WorkoutType.INTERVALS: "Interval Training Run",
+                WorkoutType.FARTLEK: "Hill Run"
+            }
+            return run_titles.get(workout_type, "Training Run")
+
+        # Sport-specific naming for cycling
+        elif sport.lower() == "ride":
+            cycling_titles = {
+                WorkoutType.REST: "Rest Day",
+                WorkoutType.RECOVERY: "Recovery Ride",
+                WorkoutType.AEROBIC: "Endurance Ride",
+                WorkoutType.TEMPO: "Tempo Ride",
+                WorkoutType.THRESHOLD: "Threshold Intervals",
+                WorkoutType.VO2MAX: "VO2max Intervals",
+                WorkoutType.LONG: "Long Ride",
+                WorkoutType.INTERVALS: "Sprint Intervals",
+                WorkoutType.FARTLEK: "Hill Repeats"
+            }
+            return cycling_titles.get(workout_type, "Training Ride")
+
+        # Generic titles for other sports
+        else:
+            titles = {
+                WorkoutType.REST: "Rest Day",
+                WorkoutType.RECOVERY: f"Recovery {sport}",
+                WorkoutType.AEROBIC: f"Aerobic {sport}",
+                WorkoutType.TEMPO: f"Tempo {sport}",
+                WorkoutType.THRESHOLD: f"Threshold {sport}",
+                WorkoutType.VO2MAX: f"VO2max {sport}",
+                WorkoutType.LONG: f"Long {sport}",
+                WorkoutType.INTERVALS: f"{sport} Intervals",
+                WorkoutType.FARTLEK: f"Fartlek {sport}"
+            }
+            return titles.get(workout_type, f"{sport} Training")
 
     def _generate_workout_description(
         self,
@@ -1703,6 +2022,110 @@ class TrainingPlanGenerator:
 
         return distribution
 
+    def _apply_intensity_distribution_by_mesocycle(
+        self,
+        workouts: List[WorkoutPlan],
+        mesocycles: List[object]
+    ):
+        """Apply intensity distribution for each mesocycle separately.
+
+        This ensures that RECOVERY weeks get proper EASY-only intensity distribution.
+        """
+        # Group workouts by mesocycle
+        plan_start_date = mesocycles[0].start_date
+
+        for mesocycle in mesocycles:
+            # Calculate which workouts belong to this mesocycle
+            mesocycle_start_day = (mesocycle.start_date - plan_start_date).days
+            mesocycle_end_day = (mesocycle.end_date - plan_start_date).days
+
+            # Filter workouts that belong to this mesocycle
+            mesocycle_workouts = [
+                w for i, w in enumerate(workouts)
+                if mesocycle_start_day <= i <= mesocycle_end_day
+            ]
+
+            if mesocycle_workouts:
+                # Apply intensity distribution for this specific mesocycle
+                self._apply_mesocycle_intensity_distribution(mesocycle_workouts, mesocycle)
+
+    def _apply_mesocycle_intensity_distribution(
+        self,
+        workouts: List[WorkoutPlan],
+        mesocycle: Mesocycle
+    ):
+        """Apply mesocycle intensity distribution to override workout intensities.
+
+        Uses the easy/moderate/hard percentages from mesocycle to override
+        some workout intensities for proper periodization.
+        """
+        import random
+
+        # SPORTS SCIENCE: RECOVERY weeks MUST only have EASY intensity - this is inviolable
+        # This is the FINAL enforcer of recovery week principles
+        if mesocycle.cycle_type == MesocycleType.RECOVERY:
+            # Force ALL recovery week workouts to EASY intensity, no exceptions
+            for workout in workouts:
+                if workout.workout_type != WorkoutType.REST:
+                    # Ensure workout type is RECOVERY
+                    if workout.workout_type != WorkoutType.RECOVERY:
+                        print(f"WARNING: Recovery week has wrong type {workout.workout_type}, fixing to RECOVERY")
+                        workout.workout_type = WorkoutType.RECOVERY
+
+                    # CRITICAL: Force EASY intensity for ALL recovery workouts
+                    workout.intensity_level = 'easy'  # This is the absolute rule
+
+                    # Regenerate title to match recovery state
+                    workout.title = self._generate_workout_title(WorkoutType.RECOVERY, workout.primary_sport)
+                    workout.description = f"Recovery week - easy {workout.primary_sport.lower()} only"
+
+                    # Cap load at recovery levels
+                    workout.planned_load = min(50, workout.planned_load)
+
+            # EXIT IMMEDIATELY - no random intensity assignment for recovery weeks
+            return
+
+        # Skip REST days - only consider workouts with actual training load
+        training_workouts = [w for w in workouts if w.workout_type != WorkoutType.REST]
+
+        if not training_workouts:
+            return
+
+        total_training_days = len(training_workouts)
+
+        # Calculate target counts for each intensity
+        target_easy = int(total_training_days * mesocycle.easy_percentage)
+        target_moderate = int(total_training_days * mesocycle.moderate_percentage)
+        target_hard = int(total_training_days * mesocycle.hard_percentage)
+
+        # Ensure totals add up (handle rounding)
+        remaining = total_training_days - target_easy - target_moderate - target_hard
+        if remaining > 0:
+            target_easy += remaining
+
+        # FIXED APPROACH: Randomly assign intensities according to mesocycle percentages
+        # This overrides the workout type-based intensity assignments
+
+        # Create a list of target intensities based on percentages
+        intensity_targets = []
+        intensity_targets.extend(['hard'] * target_hard)
+        intensity_targets.extend(['moderate'] * target_moderate)
+        intensity_targets.extend(['easy'] * target_easy)
+
+        # Add extra 'easy' for any remaining workouts (due to rounding)
+        while len(intensity_targets) < total_training_days:
+            intensity_targets.append('easy')
+
+        # Shuffle to randomize assignment
+        random.shuffle(intensity_targets)
+
+        # Apply the shuffled intensities to workouts
+        for i, workout in enumerate(training_workouts):
+            if i < len(intensity_targets):
+                workout.intensity_level = intensity_targets[i]
+            else:
+                workout.intensity_level = 'easy'  # fallback
+
     def _add_second_session_if_appropriate(
         self,
         workout: WorkoutPlan,
@@ -1781,3 +2204,156 @@ class TrainingPlanGenerator:
                     # Update rationale to mention scaling
                     if workout.second_activity_rationale:
                         workout.second_activity_rationale += f" (scaled {scale_factor:.1%})"
+
+            # Add evening sessions if under budget
+            elif total_time < weekly_budget_min * 0.85:  # Only if significantly under budget
+                deficit_min = weekly_budget_min - total_time
+
+                # Find non-rest days suitable for evening sessions
+                training_days = [w for w in week_workouts if w.workout_type != WorkoutType.REST]
+
+                # Priority: easy/moderate days that don't have second sessions yet
+                available_days = [w for w in training_days
+                                if w.intensity_level in ['easy', 'moderate']
+                                and not w.second_activity_title]
+
+                # If no available easy days, use any training day without second session
+                if not available_days:
+                    available_days = [w for w in training_days if not w.second_activity_title]
+
+                # Distribute deficit across available days
+                if available_days and deficit_min > 30:  # Only add if meaningful deficit
+                    session_duration = min(90, deficit_min // len(available_days))  # Cap at 90min
+
+                    for workout in available_days[:2]:  # Limit to 2 evening sessions per week
+                        if session_duration >= 30:  # Only add if at least 30min
+                            workout.second_activity_title = "Easy Aerobic"
+                            workout.second_activity_duration = int(session_duration)
+                            workout.second_activity_rationale = f"Evening session to meet weekly volume target"
+
+    def _validate_and_fix_plan(self, workouts: List[WorkoutPlan]) -> List[WorkoutPlan]:
+        """
+        CRITICAL: Final validation layer implementing Generate->Validate->Present architecture.
+
+        Catches and fixes all known issues before plan presentation:
+        1. Date sequencing problems
+        2. Load/duration inconsistencies
+        3. Dangerous load spikes
+        4. Activity naming truncation
+        5. Duplicate day numbers
+
+        This is the final quality gate ensuring professional-grade output.
+        """
+        validated_workouts = []
+        issues_fixed = 0
+
+        for i, workout in enumerate(workouts):
+            # Create a copy to avoid modifying original
+            validated_workout = WorkoutPlan(
+                date=workout.date,
+                day_number=workout.day_number,
+                week_number=workout.week_number,
+                mesocycle=workout.mesocycle,
+                workout_type=workout.workout_type,
+                primary_sport=workout.primary_sport,
+                alternative_sports=workout.alternative_sports or [],
+                planned_load=workout.planned_load,
+                intensity_level=workout.intensity_level,
+                hr_zones=workout.hr_zones or [],
+                total_duration_min=workout.total_duration_min,
+                warmup_min=workout.warmup_min,
+                main_set_min=workout.main_set_min,
+                cooldown_min=workout.cooldown_min,
+                title=workout.title,
+                description=workout.description,
+                workout_structure=workout.workout_structure or {},
+                primary_system=workout.primary_system,
+                secondary_systems=workout.secondary_systems or [],
+                expected_adaptations=workout.expected_adaptations or [],
+                recovery_hours_needed=workout.recovery_hours_needed,
+                next_day_recommendation=workout.next_day_recommendation,
+                second_activity_title=getattr(workout, 'second_activity_title', None),
+                second_activity_duration=getattr(workout, 'second_activity_duration', None),
+                second_activity_rationale=getattr(workout, 'second_activity_rationale', None),
+                # CRITICAL FIX: Copy predicted values to maintain fitness progression
+                predicted_fitness=workout.predicted_fitness,
+                predicted_fatigue=workout.predicted_fatigue,
+                predicted_form=workout.predicted_form,
+                overtraining_risk=workout.overtraining_risk
+            )
+
+            # VALIDATION 1: Load/Duration Consistency
+            if validated_workout.planned_load == 0 and validated_workout.total_duration_min > 0:
+                self.logger.warning(f"VALIDATION FIX: Day {validated_workout.day_number} - 0 TSS with {validated_workout.total_duration_min}min duration")
+                validated_workout.total_duration_min = 0
+                validated_workout.warmup_min = 0
+                validated_workout.main_set_min = 0
+                validated_workout.cooldown_min = 0
+                validated_workout.workout_type = WorkoutType.REST
+                validated_workout.title = "Complete Rest"
+                validated_workout.description = "Rest day - no training"
+                issues_fixed += 1
+
+            # VALIDATION 2: Dangerous Load Spikes
+            if validated_workout.planned_load > 400:  # Extreme threshold
+                self.logger.warning(f"VALIDATION FIX: Day {validated_workout.day_number} - Dangerous load {validated_workout.planned_load:.0f} TSS capped to 400")
+                validated_workout.planned_load = 400
+                validated_workout.description += " (Load capped for safety)"
+                issues_fixed += 1
+
+            # VALIDATION 3: Activity Name Truncation Prevention
+            if validated_workout.title and len(validated_workout.title) > 25:
+                # Ensure activity names fit in display columns
+                original_title = validated_workout.title
+                validated_workout.title = validated_workout.title[:25]
+                if original_title != validated_workout.title:
+                    self.logger.debug(f"Activity name truncated: {original_title} → {validated_workout.title}")
+
+            validated_workouts.append(validated_workout)
+
+        # VALIDATION 4: Final chronological sort to ensure proper date sequencing
+        validated_workouts.sort(key=lambda w: w.date)
+
+        # VALIDATION 5: Strength Training Deficit Check (15-20% minimum requirement)
+        total_training_days = len([w for w in validated_workouts if w.workout_type != WorkoutType.REST])
+        strength_days = len([w for w in validated_workouts if
+                           (w.primary_sport in ["WeightTraining", "Workout"]) or
+                           (w.second_activity_title and "Strength" in w.second_activity_title)])
+
+        if total_training_days > 0:
+            strength_percentage = (strength_days / total_training_days) * 100
+            minimum_strength_percentage = 15.0  # Sports science minimum for injury prevention
+
+            if strength_percentage < minimum_strength_percentage:
+                # Calculate how many more strength sessions we need
+                needed_strength_days = int((minimum_strength_percentage / 100.0) * total_training_days) - strength_days
+                self.logger.warning(f"VALIDATION FIX: Strength training deficit - {strength_percentage:.1f}% vs {minimum_strength_percentage}% minimum")
+
+                # Add strength training to easy/moderate days
+                candidates = [w for w in validated_workouts if
+                            w.intensity_level in ["easy", "moderate"] and
+                            w.workout_type not in [WorkoutType.REST, WorkoutType.RECOVERY] and
+                            not (w.second_activity_title and "Strength" in w.second_activity_title)]
+
+                for i, workout in enumerate(candidates[:needed_strength_days]):
+                    workout.second_activity_title = "Strength Training"
+                    workout.second_activity_duration = 45
+                    workout.second_activity_rationale = "Added to meet 15% minimum strength requirement for injury prevention"
+                    issues_fixed += 1
+                    self.logger.info(f"VALIDATION FIX: Added strength training to Day {workout.day_number}")
+
+        # VALIDATION 6: Fix day numbering AFTER sorting to ensure sequential numbering
+        for i, validated_workout in enumerate(validated_workouts):
+            expected_day = i + 1
+            if validated_workout.day_number != expected_day:
+                self.logger.warning(f"VALIDATION FIX: Day number sequence corrected from {validated_workout.day_number} to {expected_day}")
+                validated_workout.day_number = expected_day
+                issues_fixed += 1
+
+        # Report validation results
+        if issues_fixed > 0:
+            self.logger.info(f"PLAN VALIDATION: Fixed {issues_fixed} issues before presentation")
+        else:
+            self.logger.info("PLAN VALIDATION: No issues found - plan ready for presentation")
+
+        return validated_workouts

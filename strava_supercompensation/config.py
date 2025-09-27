@@ -24,12 +24,12 @@ class Config:
     # Model Parameters (Banister Model)
     FITNESS_DECAY_RATE: float = float(os.getenv("FITNESS_DECAY_RATE", "42"))  # days
     FATIGUE_DECAY_RATE: float = float(os.getenv("FATIGUE_DECAY_RATE", "7"))  # days
-    FITNESS_MAGNITUDE: float = float(os.getenv("FITNESS_MAGNITUDE", "0.1"))  # Reduced to prevent overflow
-    FATIGUE_MAGNITUDE: float = float(os.getenv("FATIGUE_MAGNITUDE", "0.15"))  # Reduced to prevent overflow
+    FITNESS_MAGNITUDE: float = float(os.getenv("FITNESS_MAGNITUDE", "0.03"))  # Sport science validated
+    FATIGUE_MAGNITUDE: float = float(os.getenv("FATIGUE_MAGNITUDE", "0.05"))  # Sport science validated
 
-    # Physiological Bounds - prevent corrupted metrics (adjusted for serious cyclists)
-    MAX_DAILY_LOAD: float = float(os.getenv("MAX_DAILY_LOAD", "1000"))  # Max for ultra-endurance events
-    MAX_FITNESS: float = float(os.getenv("MAX_FITNESS", "400"))  # Elite athlete fitness levels
+    # Physiological Bounds - prevent corrupted metrics (Sport Science Based)
+    MAX_DAILY_LOAD: float = float(os.getenv("MAX_DAILY_LOAD", "400"))  # Realistic daily max (Tour stage)
+    MAX_FITNESS: float = float(os.getenv("MAX_FITNESS", "300"))  # Elite athlete ceiling (Tour de France)
     MAX_FATIGUE: float = float(os.getenv("MAX_FATIGUE", "150"))  # High fatigue tolerance
     MAX_FORM: float = float(os.getenv("MAX_FORM", "100"))  # Extended form range
 
@@ -42,6 +42,22 @@ class Config:
     TRAINING_MAX_WEEKLY_HOURS: float = float(os.getenv("TRAINING_MAX_WEEKLY_HOURS", "14"))  # Maximum hours per week
     TRAINING_REST_DAYS: str = os.getenv("TRAINING_REST_DAYS", "0")  # Comma-separated days (0=Mon, 6=Sun)
     TRAINING_STRENGTH_DAYS: str = os.getenv("TRAINING_STRENGTH_DAYS", "1")  # Mandatory strength days (1=Tue)
+
+    # Activity-Specific Maximum Durations (minutes) - Sport Science Based
+    MAX_DURATION_CYCLING: int = int(os.getenv("MAX_DURATION_CYCLING", "300"))
+    MAX_DURATION_RUNNING: int = int(os.getenv("MAX_DURATION_RUNNING", "180"))
+    MAX_DURATION_HIKING: int = int(os.getenv("MAX_DURATION_HIKING", "360"))
+    MAX_DURATION_WEIGHT_TRAINING: int = int(os.getenv("MAX_DURATION_WEIGHT_TRAINING", "120"))
+    MAX_DURATION_WORKOUT: int = int(os.getenv("MAX_DURATION_WORKOUT", "90"))
+    MAX_DURATION_ROWING: int = int(os.getenv("MAX_DURATION_ROWING", "180"))
+    MAX_DURATION_SWIMMING: int = int(os.getenv("MAX_DURATION_SWIMMING", "240"))
+    MAX_DURATION_SKIING: int = int(os.getenv("MAX_DURATION_SKIING", "300"))
+    MAX_DURATION_YOGA: int = int(os.getenv("MAX_DURATION_YOGA", "120"))
+
+    # Mesocycle-Specific Duration Multipliers (applied to max durations above)
+    MAX_DURATION_RECOVERY_MULTIPLIER: float = float(os.getenv("MAX_DURATION_RECOVERY_MULTIPLIER", "0.6"))
+    MAX_DURATION_TAPER_MULTIPLIER: float = float(os.getenv("MAX_DURATION_TAPER_MULTIPLIER", "0.8"))
+    MAX_DURATION_INTENSIFICATION_MULTIPLIER: float = float(os.getenv("MAX_DURATION_INTENSIFICATION_MULTIPLIER", "0.9"))
 
     # Application
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
@@ -240,6 +256,32 @@ class Config:
     def get_sport_load_multiplier(cls, sport: str) -> float:
         """Get load multiplier for sport-specific TSS adjustment."""
         return cls.SPORT_LOAD_MULTIPLIERS.get(sport, 1.0)
+
+    @classmethod
+    def get_sport_max_duration(cls, sport: str) -> int:
+        """Get maximum duration for a specific sport in minutes."""
+        sport_max_durations = {
+            'Run': cls.MAX_DURATION_RUNNING,
+            'Ride': cls.MAX_DURATION_CYCLING,
+            'Hike': cls.MAX_DURATION_HIKING,
+            'WeightTraining': cls.MAX_DURATION_WEIGHT_TRAINING,
+            'Workout': cls.MAX_DURATION_WORKOUT,
+            'Rowing': cls.MAX_DURATION_ROWING,
+            'Swim': cls.MAX_DURATION_SWIMMING,
+            'AlpineSki': cls.MAX_DURATION_SKIING,
+            'Yoga': cls.MAX_DURATION_YOGA
+        }
+        return sport_max_durations.get(sport, 180)  # Default 3 hours
+
+    @classmethod
+    def get_mesocycle_duration_multiplier(cls, mesocycle_type_str: str) -> float:
+        """Get duration reduction multiplier for mesocycle type."""
+        multipliers = {
+            'recovery': cls.MAX_DURATION_RECOVERY_MULTIPLIER,
+            'realization': cls.MAX_DURATION_TAPER_MULTIPLIER,
+            'intensification': cls.MAX_DURATION_INTENSIFICATION_MULTIPLIER
+        }
+        return multipliers.get(mesocycle_type_str.lower(), 1.0)
 
     @classmethod
     def validate(cls) -> bool:

@@ -10,6 +10,7 @@ from ..db.models import Metric, Activity, PeriodizationState
 from .multisport_metrics import MultiSportCalculator
 from .garmin_scores_analyzer import get_garmin_scores_analyzer
 from .hrv_baseline_analyzer import get_hrv_baseline_analyzer
+from .hrv_deep_analyzer import HRVDeepAnalyzer
 from .multisystem_recovery import MultiSystemRecoveryModel, create_recovery_analysis_report
 from .environmental_factors import EnvironmentalAnalyzer, EnvironmentalProfile
 
@@ -32,7 +33,8 @@ class RecommendationEngine:
         self.user_id = user_id
         self.db = get_db()
         self.garmin_scores = get_garmin_scores_analyzer(user_id)  # Garmin device scores
-        self.hrv_baseline = get_hrv_baseline_analyzer(user_id)  # HRV baseline analysis
+        self.hrv_baseline = get_hrv_baseline_analyzer(user_id)  # Legacy HRV baseline analysis
+        self.hrv_deep = HRVDeepAnalyzer()  # Advanced HRV analysis
         self.multisystem_recovery = MultiSystemRecoveryModel()  # Multi-system recovery
         self.environmental_analyzer = EnvironmentalAnalyzer()
 
@@ -67,7 +69,10 @@ class RecommendationEngine:
             # Get wellness data for enhanced recommendations
             wellness_readiness = self._get_wellness_readiness()
 
-            # Get HRV baseline analysis (German sports science)
+            # Get enhanced HRV analysis using deep analyzer
+            hrv_deep_analysis = self._get_enhanced_hrv_analysis(session)
+
+            # Keep legacy for compatibility (will be phased out)
             hrv_baseline_analysis = self.hrv_baseline.calculate_comprehensive_readiness()
 
             # Get all recent activities for advanced recovery analysis
@@ -80,7 +85,7 @@ class RecommendationEngine:
             recommendation = self._calculate_recommendation(
                 fitness, fatigue, form, recent_loads, recent_activities,
                 wellness_readiness, recovery_analysis, hrv_baseline_analysis,
-                today_activities
+                today_activities, hrv_deep_analysis
             )
 
             # Update database
@@ -99,7 +104,8 @@ class RecommendationEngine:
         wellness_readiness: Dict = None,
         recovery_analysis: Dict = None,
         hrv_baseline_analysis: Dict = None,
-        today_activities: List[Dict] = None
+        today_activities: List[Dict] = None,
+        hrv_deep_analysis: Dict = None
     ) -> Dict[str, any]:
         """Calculate training recommendation based on metrics and recent activities."""
 
@@ -124,6 +130,36 @@ class RecommendationEngine:
                         "comprehensive_readiness": hrv_score,
                         "readiness_status": "CRITICAL",
                         "training_contraindicated": True
+                    }
+                }
+
+        # 🧬 ENHANCED ANS SAFETY CHECK (Phase 1 Implementation)
+        if hrv_deep_analysis and hrv_deep_analysis.get('ans_readiness_score') is not None:
+            ans_score = hrv_deep_analysis['ans_readiness_score']
+            ans_status = hrv_deep_analysis.get('ans_status', 'Unknown')
+
+            # Critical ANS stress detection
+            if ans_score < 40 or ans_status in ['Severe Stress', 'High Stress']:
+                recommendations = hrv_deep_analysis.get('recommendations', [])
+                return {
+                    "type": TrainingRecommendation.REST.value,
+                    "intensity": "rest",
+                    "duration_minutes": 0,
+                    "activity": "Complete Rest",
+                    "activity_rationale": f"ANS in {ans_status} state - training contraindicated",
+                    "alternative_activities": ["Light stretching", "Meditation", "Breathwork"],
+                    "notes": [
+                        f"🧬 ANS Status: {ans_status} (Score: {ans_score:.0f}/100)",
+                        "Autonomic nervous system requires recovery",
+                        "Focus on stress reduction and sleep quality"
+                    ] + recommendations[:2],
+                    "metrics": {
+                        "ans_readiness_score": ans_score,
+                        "ans_status": ans_status,
+                        "rmssd": hrv_deep_analysis.get('rmssd'),
+                        "z_score": hrv_deep_analysis.get('z_score'),
+                        "training_contraindicated": True,
+                        "enhanced_hrv_analysis": True
                     }
                 }
 
@@ -294,6 +330,48 @@ class RecommendationEngine:
                 hrv_baseline_modifier = 0.0   # No training capacity
 
             recommendation["metrics"]["hrv_baseline_modifier"] = round(hrv_baseline_modifier, 2)
+
+        # ENHANCED ANS ANALYSIS (Phase 1 Integration)
+        if hrv_deep_analysis and hrv_deep_analysis.get('ans_readiness_score') is not None:
+            ans_score = hrv_deep_analysis['ans_readiness_score']
+            ans_status = hrv_deep_analysis.get('ans_status', 'Unknown')
+
+            # Add enhanced HRV metrics
+            recommendation["metrics"]["ans_readiness_score"] = round(ans_score, 1)
+            recommendation["metrics"]["ans_status"] = ans_status
+
+            if hrv_deep_analysis.get('rmssd'):
+                recommendation["metrics"]["rmssd_today"] = round(hrv_deep_analysis['rmssd'], 1)
+            if hrv_deep_analysis.get('z_score'):
+                recommendation["metrics"]["hrv_z_score"] = round(hrv_deep_analysis['z_score'], 2)
+            if hrv_deep_analysis.get('baseline_mean'):
+                recommendation["metrics"]["hrv_baseline_mean_enhanced"] = round(hrv_deep_analysis['baseline_mean'], 1)
+
+            # Add stress indicators
+            stress_indicators = hrv_deep_analysis.get('stress_indicators', {})
+            if stress_indicators.get('sympathetic_stress'):
+                recommendation["notes"].append("⚠️ Sympathetic stress detected in HRV")
+            if stress_indicators.get('parasympathetic_saturation'):
+                recommendation["notes"].append("📈 High HRV - possible overreaching indicator")
+
+            # Enhanced ANS-based training modifier
+            if ans_score >= 85:
+                ans_modifier = 1.1  # Enhanced capacity
+            elif ans_score >= 70:
+                ans_modifier = 1.0  # Normal capacity
+            elif ans_score >= 60:
+                ans_modifier = 0.9  # Slightly reduced capacity
+            elif ans_score >= 45:
+                ans_modifier = 0.7  # Reduced capacity
+            else:
+                ans_modifier = 0.3  # Severely reduced capacity
+
+            recommendation["metrics"]["ans_training_modifier"] = round(ans_modifier, 2)
+
+            # Combine with existing HRV modifier (take more conservative)
+            if 'hrv_baseline_modifier' in recommendation["metrics"]:
+                combined_hrv_modifier = min(hrv_baseline_modifier, ans_modifier)
+                recommendation["metrics"]["combined_hrv_modifier"] = round(combined_hrv_modifier, 2)
 
             # Add component-specific insights
             components = hrv_baseline_analysis.get('components', {})
@@ -2194,3 +2272,38 @@ class RecommendationEngine:
                 return latest_metric.fitness if latest_metric else 70.0
         except Exception:
             return 70.0
+
+    def _get_enhanced_hrv_analysis(self, session) -> Dict:
+        """
+        Get enhanced HRV analysis using the deep analyzer.
+
+        Fetches recent HRV data and performs comprehensive ANS assessment.
+        """
+        try:
+            # Import here to avoid circular imports
+            from ..db.models import HRVData
+
+            # Get recent HRV data (30 days for baseline)
+            end_date = datetime.now(timezone.utc)
+            start_date = end_date - timedelta(days=30)
+
+            hrv_records = session.query(HRVData).filter(
+                HRVData.date >= start_date.date(),
+                HRVData.date <= end_date.date()
+            ).order_by(HRVData.date.desc()).all()
+
+            if not hrv_records:
+                return self.hrv_deep.analyze_daily_hrv(None, [])
+
+            # Get today's HRV and historical data
+            today_hrv = hrv_records[0].rmssd if hrv_records else None
+            historical_rmssd = [record.rmssd for record in hrv_records if record.rmssd is not None]
+
+            # Perform deep HRV analysis
+            return self.hrv_deep.analyze_daily_hrv(today_hrv, historical_rmssd)
+
+        except Exception as e:
+            # Fallback to basic analysis if deep analysis fails
+            import logging
+            logging.getLogger(__name__).warning(f"Enhanced HRV analysis failed: {e}")
+            return self.hrv_deep.analyze_daily_hrv(None, [])

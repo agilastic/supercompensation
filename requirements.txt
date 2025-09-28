@@ -15,6 +15,12 @@ aiohttp>=3.9.0
 matplotlib>=3.7.0
 plotly>=5.17.0
 
+# Phase 1: Advanced HRV Analysis
+heartpy>=1.2.7
+
+# Phase 1: Training Load Validation
+# Note: Uses custom validation script (scripts/validate_load_model.py)
+
 # Optional: API server
 fastapi>=0.104.0
 uvicorn>=0.24.0

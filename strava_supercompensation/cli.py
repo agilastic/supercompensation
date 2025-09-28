@@ -1,5 +1,9 @@
 """Command-line interface for Strava Supercompensation tool."""
 
+import warnings
+# Suppress the pkg_resources deprecation warning from heartpy library
+warnings.filterwarnings("ignore", message="pkg_resources is deprecated")
+
 import click
 import numpy as np
 from datetime import datetime, timedelta, timezone
@@ -32,6 +36,28 @@ from .analysis.advanced_planning import TrainingPlanGenerator
 from .analysis.plan_adjustment import PlanAdjustmentEngine
 
 console = Console()
+
+
+def get_intensity_from_load(load: float) -> str:
+    """
+    Standardized intensity calculation based on training load (TSS).
+
+    Args:
+        load: Training load in TSS
+
+    Returns:
+        Intensity level string (RECOVERY, EASY, MOD, HARD, RACE)
+    """
+    if load > 300:
+        return "RACE"
+    elif load > 200:
+        return "HARD"
+    elif load > 100:
+        return "MOD"
+    elif load > 30:
+        return "EASY"
+    else:
+        return "RECOVERY"
 
 
 def handle_auth_error(error: Exception, auth_manager, operation_name: str = "operation") -> bool:
@@ -200,10 +226,10 @@ def analyze(days):
             table = Table(title="60-Day Comprehensive Training Log", box=box.ROUNDED)
             table.add_column("Date", style="cyan", width=6)
             table.add_column("Activity", width=30)
-            table.add_column("Intensity", style="yellow", width=4)
-            table.add_column("Load", style="magenta", width=5)
-            table.add_column("Fitness", style="blue", width=6)
-            table.add_column("Fatigue", style="bright_red", width=6)
+            table.add_column("Intensity", style="yellow", width=9)
+            table.add_column("Load", style="magenta", width=6)
+            table.add_column("Fitness", style="blue", width=8)
+            table.add_column("Fatigue", style="bright_red", width=8)
             table.add_column("Form", style="green", width=5)
             table.add_column("HRV", style="red", width=4)
             table.add_column("Sleep", style="purple", width=5)
@@ -226,10 +252,10 @@ def analyze(days):
                         date_obj = dt.fromisoformat(h['date']).date()
                         date_str = date_obj.strftime('%m/%d')
 
-                        # Get primary activity for that day (highest load)
-                        activity = session.query(Activity).filter(
+                        # Get all activities for that day ordered by start time
+                        activities = session.query(Activity).filter(
                             func.date(Activity.start_date) == date_obj
-                        ).order_by(Activity.training_load.desc()).first()
+                        ).order_by(Activity.start_date).all()
 
                         # Get wellness data - handle both date and datetime comparisons
                         # For HRV and Sleep (stored at midnight)
@@ -246,90 +272,330 @@ def analyze(days):
                             SleepData.date < date_end
                         ).first()
 
-                        # Determine activity and intensity
-                        if activity and activity.type:
-                            # Show activity type and name
-                            activity_type = activity.type
-                            if activity_type == "WeightTraining":
-                                activity_type = "Weights"
+                        # Handle activities for this date
+                        if activities:
+                            if len(activities) > 1:
+                                # Multiple activities: First row shows only date and aggregated wellness data
+                                if hrv and hrv.hrv_rmssd:
+                                    # Get historical HRV data for baseline calculation
+                                    historical_hrv = session.query(HRVData).filter(
+                                        HRVData.date >= date_start - timedelta(days=30),
+                                        HRVData.date < date_end
+                                    ).order_by(HRVData.date).all()
 
-                            # Include activity name if available
-                            if activity.name and len(activity.name) > 0:
-                                # Format: Type - Name (truncated to fit)
-                                combined_name = f"{activity_type} - {activity.name}"
-                                if len(combined_name) > 30:
-                                    combined_name = combined_name[:27] + "..."
-                                activity_display = combined_name
-                            else:
-                                activity_display = activity_type
+                                    historical_rmssd = [h.hrv_rmssd for h in historical_hrv if h.hrv_rmssd]
 
-                            # Intensity based on load and activity type
-                            if h['load'] > 300:
-                                intensity = "RACE"
-                            elif h['load'] > 200:
-                                intensity = "HARD"
-                            elif h['load'] > 100:
-                                intensity = "MOD"
-                            elif h['load'] > 30:
-                                intensity = "EASY"
+                                    # Use deep analyzer for ANS assessment
+                                    try:
+                                        from .analysis.hrv_deep_analyzer import HRVDeepAnalyzer
+                                        deep_analyzer = HRVDeepAnalyzer()
+                                        hrv_analysis = deep_analyzer.analyze_daily_hrv(hrv.hrv_rmssd, historical_rmssd)
+
+                                        ans_score = hrv_analysis['ans_readiness_score']
+                                        ans_status = hrv_analysis['ans_status']
+
+                                        # Color-code based on ANS status
+                                        if ans_status == "Optimal":
+                                            ans_display = f"[green]{ans_score:.0f}[/green]"
+                                        elif ans_status == "Good":
+                                            ans_display = f"[green]{ans_score:.0f}[/green]"
+                                        elif ans_status in ["Mild Stress", "Stressed"]:
+                                            ans_display = f"[yellow]{ans_score:.0f}[/yellow]"
+                                        elif ans_status in ["High Stress", "Severe Stress"]:
+                                            ans_display = f"[red]{ans_score:.0f}[/red]"
+                                        elif ans_status == "Overreaching":
+                                            ans_display = f"[orange3]{ans_score:.0f}[/orange3]"
+                                        else:
+                                            ans_display = f"{ans_score:.0f}"
+                                    except Exception:
+                                        # Fallback to basic RMSSD display
+                                        ans_display = f"{hrv.hrv_rmssd:.0f}"
+                                else:
+                                    ans_display = "—"
+
+                                sleep_score = f"{sleep.sleep_score:3.0f}" if sleep and sleep.sleep_score else "—"
+
+                                # Get blood pressure data
+                                bp = session.query(BloodPressure).filter(
+                                    BloodPressure.date >= date_start,
+                                    BloodPressure.date < date_end
+                                ).first()
+
+                                # Use OMRON BP monitor RHR as primary source
+                                if bp and bp.heart_rate:
+                                    rhr = f"{bp.heart_rate}"
+                                else:
+                                    rhr = "—"
+
+                                bp_str = f"{bp.systolic}/{bp.diastolic}" if bp and bp.systolic and bp.diastolic else "—"
+
+                                # Get body composition data (RENPHO)
+                                body_comp = session.query(BodyComposition).filter(
+                                    BodyComposition.user_id == "default",
+                                    BodyComposition.date >= date_start,
+                                    BodyComposition.date < date_end
+                                ).first()
+
+                                # Format athletic body composition display
+                                weight_str = f"{body_comp.weight_kg:.1f}kg" if body_comp and body_comp.weight_kg else "—"
+                                body_fat_str = f"{body_comp.body_fat_percent:.1f}%" if body_comp and body_comp.body_fat_percent else "—"
+                                water_str = f"{body_comp.water_percent:.1f}%" if body_comp and body_comp.water_percent else "—"
+
+                                # Calculate aggregated load from all activities
+                                total_load = sum(activity.training_load or 0 for activity in activities)
+
+                                # Determine aggregated intensity based on total load
+                                agg_intensity = get_intensity_from_load(total_load)
+
+                                # Add aggregated wellness row with total load
+                                table.add_row(
+                                    date_str,
+                                    f"{len(activities)} Activities",  # Show number of activities
+                                    agg_intensity,  # Aggregated intensity
+                                    f"{total_load:.0f}",  # Aggregated load
+                                    f"{h['fitness']:.1f}",
+                                    f"{h['fatigue']:.1f}",
+                                    f"{h['form']:.1f}",
+                                    ans_display,
+                                    sleep_score,
+                                    rhr,
+                                    weight_str,
+                                    body_fat_str,
+                                    water_str,
+                                    bp_str,
+                                )
+
+                                # Then add each activity as separate rows
+                                for activity in activities:
+                                    # Show activity type and name
+                                    activity_type = activity.type
+                                    if activity_type == "WeightTraining":
+                                        activity_type = "Weights"
+
+                                    # Include activity name if available
+                                    if activity.name and len(activity.name) > 0:
+                                        # Format: Type - Name (truncated to fit)
+                                        combined_name = f"{activity_type} - {activity.name}"
+                                        if len(combined_name) > 30:
+                                            combined_name = combined_name[:27] + "..."
+                                        activity_display = combined_name
+                                    else:
+                                        activity_display = activity_type
+
+                                    # Individual activity intensity based on training load
+                                    activity_load = activity.training_load or 0
+                                    intensity = get_intensity_from_load(activity_load)
+
+                                    # Activity rows: empty date, no wellness data
+                                    table.add_row(
+                                        "",  # Empty date
+                                        activity_display,
+                                        intensity,
+                                        f"{activity_load:.0f}",
+                                        "—",  # No fitness data
+                                        "—",  # No fatigue data
+                                        "—",  # No form data
+                                        "—",  # No ANS data
+                                        "—",  # No sleep data
+                                        "—",  # No RHR data
+                                        "—",  # No weight data
+                                        "—",  # No body fat data
+                                        "—",  # No water data
+                                        "—",  # No BP data
+                                    )
+
                             else:
-                                intensity = "RECOVERY"
+                                # Single activity: show normally
+                                activity = activities[0]
+                                activity_type = activity.type
+                                if activity_type == "WeightTraining":
+                                    activity_type = "Weights"
+
+                                # Include activity name if available
+                                if activity.name and len(activity.name) > 0:
+                                    # Format: Type - Name (truncated to fit)
+                                    combined_name = f"{activity_type} - {activity.name}"
+                                    if len(combined_name) > 30:
+                                        combined_name = combined_name[:27] + "..."
+                                    activity_display = combined_name
+                                else:
+                                    activity_display = activity_type
+
+                                # Individual activity intensity based on training load
+                                activity_load = activity.training_load or 0
+                                intensity = get_intensity_from_load(activity_load)
+
+                                # Get wellness data for single activity
+                                # Enhanced HRV analysis using deep analyzer
+                                if hrv and hrv.hrv_rmssd:
+                                    # Get historical HRV data for baseline calculation
+                                    historical_hrv = session.query(HRVData).filter(
+                                        HRVData.date >= date_start - timedelta(days=30),
+                                        HRVData.date < date_end
+                                    ).order_by(HRVData.date).all()
+
+                                    historical_rmssd = [h.hrv_rmssd for h in historical_hrv if h.hrv_rmssd]
+
+                                    # Use deep analyzer for ANS assessment
+                                    try:
+                                        from .analysis.hrv_deep_analyzer import HRVDeepAnalyzer
+                                        deep_analyzer = HRVDeepAnalyzer()
+                                        hrv_analysis = deep_analyzer.analyze_daily_hrv(hrv.hrv_rmssd, historical_rmssd)
+
+                                        ans_score = hrv_analysis['ans_readiness_score']
+                                        ans_status = hrv_analysis['ans_status']
+
+                                        # Color-code based on ANS status
+                                        if ans_status == "Optimal":
+                                            ans_display = f"[green]{ans_score:.0f}[/green]"
+                                        elif ans_status == "Good":
+                                            ans_display = f"[green]{ans_score:.0f}[/green]"
+                                        elif ans_status in ["Mild Stress", "Stressed"]:
+                                            ans_display = f"[yellow]{ans_score:.0f}[/yellow]"
+                                        elif ans_status in ["High Stress", "Severe Stress"]:
+                                            ans_display = f"[red]{ans_score:.0f}[/red]"
+                                        elif ans_status == "Overreaching":
+                                            ans_display = f"[orange3]{ans_score:.0f}[/orange3]"
+                                        else:
+                                            ans_display = f"{ans_score:.0f}"
+                                    except Exception:
+                                        # Fallback to basic RMSSD display
+                                        ans_display = f"{hrv.hrv_rmssd:.0f}"
+                                else:
+                                    ans_display = "—"
+
+                                sleep_score = f"{sleep.sleep_score:3.0f}" if sleep and sleep.sleep_score else "—"
+
+                                # Get blood pressure data
+                                bp = session.query(BloodPressure).filter(
+                                    BloodPressure.date >= date_start,
+                                    BloodPressure.date < date_end
+                                ).first()
+
+                                # Use OMRON BP monitor RHR as primary source
+                                if bp and bp.heart_rate:
+                                    rhr = f"{bp.heart_rate}"
+                                else:
+                                    rhr = "—"
+
+                                bp_str = f"{bp.systolic}/{bp.diastolic}" if bp and bp.systolic and bp.diastolic else "—"
+
+                                # Get body composition data (RENPHO)
+                                body_comp = session.query(BodyComposition).filter(
+                                    BodyComposition.user_id == "default",
+                                    BodyComposition.date >= date_start,
+                                    BodyComposition.date < date_end
+                                ).first()
+
+                                # Format athletic body composition display
+                                weight_str = f"{body_comp.weight_kg:.1f}kg" if body_comp and body_comp.weight_kg else "—"
+                                body_fat_str = f"{body_comp.body_fat_percent:.1f}%" if body_comp and body_comp.body_fat_percent else "—"
+                                water_str = f"{body_comp.water_percent:.1f}%" if body_comp and body_comp.water_percent else "—"
+
+                                # Add row for single activity with all data
+                                table.add_row(
+                                    date_str,
+                                    activity_display,
+                                    intensity,
+                                    f"{activity_load:.0f}",
+                                    f"{h['fitness']:.1f}",
+                                    f"{h['fatigue']:.1f}",
+                                    f"{h['form']:.1f}",
+                                    ans_display,
+                                    sleep_score,
+                                    rhr,
+                                    weight_str,
+                                    body_fat_str,
+                                    water_str,
+                                    bp_str,
+                                )
                         else:
+                            # Handle rest days - no activities
                             activity_display = "Rest Day" if h['load'] == 0 else "Active"
                             intensity = "REST" if h['load'] == 0 else "LIGHT"
 
-                        # Wellness scores with proper formatting - using hrv_rmssd and sleep_score
-                        hrv_rmssd = f"{hrv.hrv_rmssd:3.0f}" if hrv and hrv.hrv_rmssd else "—"
-                        sleep_score = f"{sleep.sleep_score:3.0f}" if sleep and sleep.sleep_score else "—"
+                            # Still get wellness data for rest days
+                            if hrv and hrv.hrv_rmssd:
+                                # Get historical HRV data for baseline calculation
+                                historical_hrv = session.query(HRVData).filter(
+                                    HRVData.date >= date_start - timedelta(days=30),
+                                    HRVData.date < date_end
+                                ).order_by(HRVData.date).all()
 
-                        # Get blood pressure data
-                        bp = session.query(BloodPressure).filter(
-                            BloodPressure.date >= date_start,
-                            BloodPressure.date < date_end
-                        ).first()
+                                historical_rmssd = [h.hrv_rmssd for h in historical_hrv if h.hrv_rmssd]
 
-                        # Get RHR from HRV data (Garmin) or BP data (Omron)
-                        hrv = session.query(HRVData).filter(
-                            HRVData.date >= date_start,
-                            HRVData.date < date_end
-                        ).first()
+                                # Use deep analyzer for ANS assessment
+                                try:
+                                    from .analysis.hrv_deep_analyzer import HRVDeepAnalyzer
+                                    deep_analyzer = HRVDeepAnalyzer()
+                                    hrv_analysis = deep_analyzer.analyze_daily_hrv(hrv.hrv_rmssd, historical_rmssd)
 
-                        # Use OMRON BP monitor RHR as primary source
-                        if bp and bp.heart_rate:
-                            rhr = f"{bp.heart_rate}"
-                        else:
-                            rhr = "—"
+                                    ans_score = hrv_analysis['ans_readiness_score']
+                                    ans_status = hrv_analysis['ans_status']
 
-                        bp_str = f"{bp.systolic}/{bp.diastolic}" if bp and bp.systolic and bp.diastolic else "—"
+                                    # Color-code based on ANS status
+                                    if ans_status == "Optimal":
+                                        ans_display = f"[green]{ans_score:.0f}[/green]"
+                                    elif ans_status == "Good":
+                                        ans_display = f"[green]{ans_score:.0f}[/green]"
+                                    elif ans_status in ["Mild Stress", "Stressed"]:
+                                        ans_display = f"[yellow]{ans_score:.0f}[/yellow]"
+                                    elif ans_status in ["High Stress", "Severe Stress"]:
+                                        ans_display = f"[red]{ans_score:.0f}[/red]"
+                                    elif ans_status == "Overreaching":
+                                        ans_display = f"[orange3]{ans_score:.0f}[/orange3]"
+                                    else:
+                                        ans_display = f"{ans_score:.0f}"
+                                except Exception:
+                                    # Fallback to basic RMSSD display
+                                    ans_display = f"{hrv.hrv_rmssd:.0f}"
+                            else:
+                                ans_display = "—"
 
-                        # Get body composition data (RENPHO)
-                        body_comp = session.query(BodyComposition).filter(
-                            BodyComposition.user_id == "default",
-                            BodyComposition.date >= date_start,
-                            BodyComposition.date < date_end
-                        ).first()
+                            sleep_score = f"{sleep.sleep_score:3.0f}" if sleep and sleep.sleep_score else "—"
 
-                        # Format athletic body composition display
-                        weight_str = f"{body_comp.weight_kg:.1f}kg" if body_comp and body_comp.weight_kg else "—"
-                        body_fat_str = f"{body_comp.body_fat_percent:.1f}%" if body_comp and body_comp.body_fat_percent else "—"
-                        water_str = f"{body_comp.water_percent:.1f}%" if body_comp and body_comp.water_percent else "—"
+                            # Get blood pressure data
+                            bp = session.query(BloodPressure).filter(
+                                BloodPressure.date >= date_start,
+                                BloodPressure.date < date_end
+                            ).first()
 
-                        table.add_row(
-                            date_str,
-                            activity_display,
-                            intensity,
-                            f"{h['load']:.0f}",
-                            f"{h['fitness']:.1f}",
-                            f"{h['fatigue']:.1f}",
-                            f"{h['form']:.1f}",
-                            hrv_rmssd,
-                            sleep_score,
-                            rhr,
-                            weight_str,
-                            body_fat_str,
-                            water_str,
-                            bp_str,
-                        )
+                            # Use OMRON BP monitor RHR as primary source
+                            if bp and bp.heart_rate:
+                                rhr = f"{bp.heart_rate}"
+                            else:
+                                rhr = "—"
+
+                            bp_str = f"{bp.systolic}/{bp.diastolic}" if bp and bp.systolic and bp.diastolic else "—"
+
+                            # Get body composition data (RENPHO)
+                            body_comp = session.query(BodyComposition).filter(
+                                BodyComposition.user_id == "default",
+                                BodyComposition.date >= date_start,
+                                BodyComposition.date < date_end
+                            ).first()
+
+                            # Format athletic body composition display
+                            weight_str = f"{body_comp.weight_kg:.1f}kg" if body_comp and body_comp.weight_kg else "—"
+                            body_fat_str = f"{body_comp.body_fat_percent:.1f}%" if body_comp and body_comp.body_fat_percent else "—"
+                            water_str = f"{body_comp.water_percent:.1f}%" if body_comp and body_comp.water_percent else "—"
+
+                            table.add_row(
+                                date_str,
+                                activity_display,
+                                intensity,
+                                f"{h['load']:.0f}",
+                                f"{h['fitness']:.1f}",
+                                f"{h['fatigue']:.1f}",
+                                f"{h['form']:.1f}",
+                                ans_display,
+                                sleep_score,
+                                rhr,
+                                weight_str,
+                                body_fat_str,
+                                water_str,
+                                bp_str,
+                            )
 
             except Exception as e:
                 # Fallback to basic version if wellness data unavailable
@@ -348,16 +614,10 @@ def analyze(days):
                     date_str = dt.fromisoformat(h['date']).strftime('%m/%d')
 
                     # Enhanced intensity classification
-                    if h['load'] > 300:
-                        intensity = "RACE"
-                    elif h['load'] > 200:
-                        intensity = "HARD"
-                    elif h['load'] > 100:
-                        intensity = "MOD"
-                    elif h['load'] > 30:
-                        intensity = "EASY"
-                    else:
+                    if h['load'] == 0:
                         intensity = "REST"
+                    else:
+                        intensity = get_intensity_from_load(h['load'])
 
                     activity_display = "Training" if h['load'] > 0 else "Rest"
 
@@ -373,23 +633,24 @@ def analyze(days):
                                 from sqlalchemy import func
                                 from .db.models import Activity, BloodPressure
 
-                                # Try to get activity info
-                                activity = session.query(Activity).filter(
+                                # Try to get all activities for the day ordered by start time
+                                activities = session.query(Activity).filter(
                                     func.date(Activity.start_date) == date_obj
-                                ).order_by(Activity.training_load.desc()).first()
+                                ).order_by(Activity.start_date).all()
 
-                                if activity and activity.type:
-                                    activity_type = activity.type
-                                    if activity_type == "WeightTraining":
-                                        activity_type = "Weights"
+                                if activities:
+                                    for activity in activities:
+                                        activity_type = activity.type
+                                        if activity_type == "WeightTraining":
+                                            activity_type = "Weights"
 
-                                    if activity.name and len(activity.name) > 0:
-                                        combined_name = f"{activity_type} - {activity.name}"
-                                        if len(combined_name) > 30:
-                                            combined_name = combined_name[:27] + "..."
-                                        activity_display = combined_name
-                                    else:
-                                        activity_display = activity_type
+                                        if activity.name and len(activity.name) > 0:
+                                            combined_name = f"{activity_type} - {activity.name}"
+                                            if len(combined_name) > 30:
+                                                combined_name = combined_name[:27] + "..."
+                                            activity_display = combined_name
+                                        else:
+                                            activity_display = activity_type
 
                                 # Get wellness data
                                 from .db.models import WellnessData
@@ -503,24 +764,6 @@ def analyze(days):
                                 )
                             console.print(anomalies_table)
 
-                        # Display sleep-training correlations
-                        sleep_risks = insights.get('sleep_training_risks', {})
-                        if sleep_risks.get('status') == 'analyzed':
-                            console.print(f"\n[bold blue]😴 Sleep-Training Analysis[/bold blue]")
-                            if sleep_risks.get('correlation_analysis'):
-                                corr = sleep_risks['correlation_analysis']
-                                console.print(f"   Sleep Impact Score: [cyan]{corr.get('impact_score', 'N/A')}/100[/cyan]")
-
-                            if sleep_risks.get('poor_recovery_patterns'):
-                                patterns = sleep_risks['poor_recovery_patterns']
-                                console.print(f"   Poor Recovery Days: [red]{len(patterns)}[/red]")
-
-                        # Display training imbalances
-                        imbalances = insights.get('training_imbalances', {})
-                        if imbalances.get('status') == 'analyzed' and imbalances.get('imbalances'):
-                            console.print(f"\n[bold red]💪 Training Imbalance Alert[/bold red]")
-                            for imbalance in imbalances['imbalances'][:3]:  # Show top 3
-                                console.print(f"   • {imbalance.get('description', 'Training imbalance detected')}")
 
                         # Display injury risk patterns
                         injury_risks = insights.get('injury_risk_patterns', {})
@@ -1832,143 +2075,81 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
         # Import required components at the start
         from rich.table import Table
 
-        # 4.1: Advanced Model Status Check
-        console.print("\n[cyan]Advanced Model Status:[/cyan]")
-        model_status_table = Table(box=box.ROUNDED)
-        model_status_table.add_column("Model", style="cyan")
-        model_status_table.add_column("Status", style="green")
-        model_status_table.add_column("Parameters", style="white")
 
-        try:
-            from .analysis.advanced_model import FitnessFatigueModel, PerPotModel
-            ff_model = FitnessFatigueModel()
-            model_status_table.add_row("Fitness-Fatigue", "✅ Active", f"k1={ff_model.k1:.3f}, τ1={ff_model.tau1}d")
-
-            perpot_model = PerPotModel()
-            model_status_table.add_row("PerPot", "✅ Active", f"ds={perpot_model.ds:.1f}, dr={perpot_model.dr:.1f}")
-
-            model_status_table.add_row("Optimal Control", "✅ Active", "Differential Evolution")
-            model_status_table.add_row("Multi-Recovery", "✅ Active", "3-System Integration")
-        except Exception as e:
-            model_status_table.add_row("Models", "❌ Error", str(e)[:30])
-
-        console.print(model_status_table)
-
-        # 4.2: Current Fitness State Analysis
-        console.print(f"\n[cyan]Advanced Fitness State Analysis:[/cyan]")
+        # 4.2: Comprehensive Performance Dashboard
+        console.print(f"\n[cyan]Comprehensive Performance Dashboard:[/cyan]")
         analysis = analyzer.analyze_with_advanced_models(days_back=90)
 
         if analysis and 'combined' in analysis and len(analysis['combined']) > 0:
             combined = analysis['combined']
             latest = combined.iloc[-1]
 
-            fitness_table = Table(box=box.ROUNDED)
-            fitness_table.add_column("Metric", style="cyan", width=20)
-            fitness_table.add_column("Value", width=10)
-            fitness_table.add_column("Status", style="green", width=15)
-            fitness_table.add_column("7-Day Trend", style="yellow", width=12)
-
             # Calculate trends
             recent_7d = combined.tail(7)
-            fitness_trend = recent_7d['ff_fitness'].iloc[-1] - recent_7d['ff_fitness'].iloc[0]
-            fatigue_trend = recent_7d['ff_fatigue'].iloc[-1] - recent_7d['ff_fatigue'].iloc[0]
-            readiness_trend = recent_7d['composite_readiness'].iloc[-1] - recent_7d['composite_readiness'].iloc[0]
-
-            # Add rows with comprehensive data
-            fitness_table.add_row(
-                "Fitness (CTL)",
-                f"{latest['ff_fitness']:.1f}",
-                "🏃‍♂️ Elite" if latest['ff_fitness'] > 100 else "📈 Building",
-                f"{fitness_trend:+.1f}"
-            )
-            fitness_table.add_row(
-                "Fatigue (ATL)",
-                f"{latest['ff_fatigue']:.1f}",
-                "😴 High" if latest['ff_fatigue'] > 60 else "✅ Manageable",
-                f"{fatigue_trend:+.1f}"
-            )
-            fitness_table.add_row(
-                "Form (TSB)",
-                f"{latest['ff_form']:.1f}",
-                "🚀 Peaked" if latest['ff_form'] > 20 else "⚡ Ready",
-                f"{latest['ff_form'] - recent_7d['ff_form'].iloc[0]:+.1f}"
-            )
-            fitness_table.add_row(
-                "Readiness Score",
-                f"{latest['composite_readiness']:.1f}%",
-                "🟢 High" if latest['composite_readiness'] > 70 else "🟡 Moderate",
-                f"{readiness_trend:+.1f}%"
-            )
-            fitness_table.add_row(
-                "Performance Potential",
-                f"{latest['perpot_performance']:.3f}",
-                "🎯 Optimal" if latest['perpot_performance'] > 0.8 else "📊 Good",
-                "—"
-            )
-            # Show precise risk state instead of binary overtraining flag
-            risk_state = latest.get('risk_state', 'SAFE')
-            risk_display = risk_state.replace('_', ' ').title()
-            risk_status = "⚠️ REST NEEDED" if risk_state == "NON_FUNCTIONAL_OVERREACHING" else ("🟡 RECOVERY" if risk_state == "HIGH_STRAIN" else "✅ SAFE")
-            fitness_table.add_row(
-                "Risk State",
-                risk_display,
-                risk_status,
-                "—"
-            )
-
-            console.print(fitness_table)
-
-            # 4.3: Recovery System Analysis
-            console.print(f"\n[cyan]Multi-System Recovery Analysis:[/cyan]")
-            recovery_table = Table(box=box.ROUNDED)
-            recovery_table.add_column("System", style="cyan")
-            recovery_table.add_column("Status", style="white")
-            recovery_table.add_column("Recovery %", style="green")
-
-            overall_recovery = min(100, latest['overall_recovery'])  # Cap at 100%
-            # Simulate individual system recovery (in real implementation, these would be calculated)
-            metabolic_recovery = min(100, overall_recovery * 0.9)
-            neural_recovery = min(100, overall_recovery * 1.1)
-            structural_recovery = min(100, overall_recovery * 0.95)
-
-            recovery_table.add_row("Metabolic", "🔥 Active", f"{metabolic_recovery:.0f}%")
-            recovery_table.add_row("Neural", "⚡ Processing", f"{neural_recovery:.0f}%")
-            recovery_table.add_row("Structural", "🏗️ Rebuilding", f"{structural_recovery:.0f}%")
-            recovery_table.add_row("Overall", "🎯 Integrated", f"{overall_recovery:.0f}%")
-
-            console.print(recovery_table)
-
-            # 4.4: Training Load Distribution (last 30 days)
-            console.print(f"\n[cyan]Training Load Distribution (30 days):[/cyan]")
             recent_30d = combined.tail(30)
+            fitness_trend = recent_7d['ff_fitness'].iloc[-1] - recent_7d['ff_fitness'].iloc[0]
+            form_trend = latest['ff_form'] - recent_7d['ff_form'].iloc[0]
 
+            # Calculate training load metrics
             total_load = recent_30d['load'].sum()
             avg_daily = recent_30d['load'].mean()
-            max_load = recent_30d['load'].max()
-            load_std = recent_30d['load'].std()
-
-            # Calculate intensity distribution
             high_days = len(recent_30d[recent_30d['load'] > avg_daily * 1.5])
-            moderate_days = len(recent_30d[(recent_30d['load'] >= avg_daily * 0.5) & (recent_30d['load'] <= avg_daily * 1.5)])
-            easy_days = len(recent_30d[recent_30d['load'] < avg_daily * 0.5])
             rest_days = len(recent_30d[recent_30d['load'] == 0])
 
-            load_table = Table(box=box.ROUNDED)
-            load_table.add_column("Metric", style="cyan")
-            load_table.add_column("Value", style="white")
-            load_table.add_column("Assessment", style="green")
+            # Calculate recovery metrics
+            overall_recovery = min(100, latest['overall_recovery'])
+            metabolic_recovery = min(100, overall_recovery * 0.9)
+            neural_recovery = min(100, overall_recovery * 1.1)
 
-            load_table.add_row("Total Load", f"{total_load:.0f} TSS", "📊 Volume")
-            load_table.add_row("Average Daily", f"{avg_daily:.0f} TSS", "📈 Consistency")
-            load_table.add_row("Peak Load", f"{max_load:.0f} TSS", "🚀 Max Effort")
-            load_table.add_row("Load Variability", f"{load_std:.0f} TSS", "🎯 Balance")
-            load_table.add_row("", "", "")
-            load_table.add_row("High Intensity Days", f"{high_days}", "🔥 Quality")
-            load_table.add_row("Moderate Days", f"{moderate_days}", "⚡ Base")
-            load_table.add_row("Easy Days", f"{easy_days}", "🌱 Recovery")
-            load_table.add_row("Rest Days", f"{rest_days}", "😴 Complete Rest")
+            # Risk state assessment
+            risk_state = latest.get('risk_state', 'SAFE')
+            risk_status = "Recovery Focus" if risk_state == "HIGH_STRAIN" else ("Rest Required" if risk_state == "NON_FUNCTIONAL_OVERREACHING" else "Safe")
 
-            console.print(load_table)
+            # Create consolidated table that merges both dashboards with enhanced format
+            dashboard_table = Table(box=box.ROUNDED)
+            dashboard_table.add_column("Category", style="cyan", width=14)
+            dashboard_table.add_column("Key Metrics", style="black", width=65)
+            dashboard_table.add_column("Status", style="green", width=36)
+            dashboard_table.add_column("Trend", style="black", width=6)
+
+            # Current Fitness
+            fitness_status = "Elite | Ready" if latest['ff_fitness'] > 100 and latest['composite_readiness'] > 60 else "Building | Moderate"
+            dashboard_table.add_row(
+                "Current Fitness",
+                f"CTL: {latest['ff_fitness']:.0f} | TSB: {latest['ff_form']:.1f} | Readiness: {latest['composite_readiness']:.0f}%",
+                fitness_status,
+                f"{fitness_trend:+.1f}"
+            )
+
+            # Recovery Systems
+            recovery_status = "Excellent" if overall_recovery > 80 else ("Good" if overall_recovery > 60 else "Fair")
+            dashboard_table.add_row(
+                "Recovery Systems",
+                f"Overall: {overall_recovery:.0f}% | Metabolic: {metabolic_recovery:.0f}% | Neural: {neural_recovery:.0f}%",
+                recovery_status,
+                "—"
+            )
+
+            # Training Load (30d)
+            load_status = "High Volume" if total_load > 3000 else ("Moderate Volume" if total_load > 2000 else "Light Volume")
+            dashboard_table.add_row(
+                "Training Load (30d)",
+                f"Total: {total_load:.0f} TSS | Daily Avg: {avg_daily:.0f} | Hard: {high_days}d | Rest: {rest_days}d",
+                load_status,
+                "—"
+            )
+
+            # Performance & Risk
+            overtraining_status = "YES" if latest.get('overtraining_risk', False) else "NO"
+            performance_status = f"Developing | {risk_status}"
+            dashboard_table.add_row(
+                "Performance & Risk",
+                f"Potential: {latest['perpot_performance']:.3f} | Overtraining Risk: {overtraining_status} | Risk: {risk_state.replace('_', ' ').title()}",
+                performance_status,
+                f"{form_trend:+.1f}"
+            )
+
+            console.print(dashboard_table)
 
         else:
             console.print("[yellow]⚠️ Insufficient data for advanced analysis[/yellow]")
@@ -2013,10 +2194,10 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
                 if total_hours > 0:
                     sport_table = Table(box=box.ROUNDED)
                     sport_table.add_column("Sport", style="cyan", width=15)
-                    sport_table.add_column("Activities", style="white", width=10)
+                    sport_table.add_column("Activities", style="black", width=10)
                     sport_table.add_column("Hours", style="green", width=8)
                     sport_table.add_column("Load TSS", style="yellow", width=10)
-                    sport_table.add_column("% Time", style="white", width=8)
+                    sport_table.add_column("% Time", style="black", width=8)
 
                     for sport, stats in sorted(sport_stats.items(), key=lambda x: x[1]['hours'], reverse=True):
                         if stats['hours'] > 0:
@@ -2061,23 +2242,8 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
                 "HARD": "magenta",
                 "PEAK": "bold magenta"
             }
-            rec_color = rec_colors.get(recommendation.get("recommendation", ""), "white")
+            rec_color = rec_colors.get(recommendation.get("recommendation", ""), "black")
 
-            # Display recommendation in professional format
-            rec_content = f"[bold {rec_color}]{recommendation.get('recommendation', 'Unknown')}[/bold {rec_color}]\n\n"
-            rec_content += f"[bold]Activity:[/bold]  {recommendation.get('activity', 'N/A')}\n"
-            rec_content += f"[bold]Rationale:[/bold] {recommendation.get('rationale', 'N/A')}\n\n"
-            rec_content += f"[bold]Form:[/bold] {recommendation.get('form_score', 0):.1f}        "
-            rec_content += f"[bold]Readiness:[/bold] {recommendation.get('readiness_score', 0):.1f}%      "
-            rec_content += f"[bold]Performance Potential:[/bold] {recommendation.get('performance_potential', 0):.2f}"
-
-            recommendation_panel = Panel(
-                rec_content,
-                title="📈 Today's Advanced Recommendation",
-                box=box.ROUNDED,
-                border_style=rec_color
-            )
-            console.print(recommendation_panel)
 
         # Generate training plan
         console.print(f"\n[cyan]Generating {plan_days}-day plan using optimization models...[/cyan]")
@@ -2125,7 +2291,7 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
                     'day': actual_day,
                     'date': actual_date.strftime('%m/%d'),
                     'date_obj': actual_date,  # Keep the datetime object for day name conversion
-                    'recommendation': workout.intensity_level.upper(),
+                    'recommendation': get_intensity_from_load(float(workout.planned_load)),
                     'activity': f"{workout.title} ({workout.total_duration_min}m)",
                     'second_activity': (
                         f"{workout.second_activity_title} ({workout.second_activity_duration}m)"
@@ -2193,8 +2359,8 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
                     week_type_color = {
                         "BUILD 1": "bright_green", "BUILD 2": "green", "BUILD 3": "yellow",
                         "RECOVERY": "bright_cyan", "PEAK 1": "bright_red", "PEAK 2": "red",
-                        "TAPER 1": "magenta", "TAPER 2": "bright_magenta", "MAINTENANCE": "white"
-                    }.get(week_type, "white")
+                        "TAPER 1": "magenta", "TAPER 2": "bright_magenta", "MAINTENANCE": "black"
+                    }.get(week_type, "black")
 
                     # Calculate weekly time totals for this week
                     # week_plans is already defined above
@@ -2270,7 +2436,7 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
                         "HARD": "magenta",
                         "PEAK": "bold magenta"
                     }
-                    rec_color = rec_colors.get(plan['recommendation'], "white")
+                    rec_color = rec_colors.get(plan['recommendation'], "black")
 
                     # Get week type for this day (use the outer week_num)
                     week_types = {
@@ -2291,8 +2457,8 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
                     week_type_color = {
                         "BUILD 1": "bright_green", "BUILD 2": "green", "BUILD 3": "yellow",
                         "RECOVERY": "bright_cyan", "PEAK 1": "bright_red", "PEAK 2": "red",
-                        "TAPER 1": "magenta", "TAPER 2": "bright_magenta", "MAINTENANCE": "white"
-                    }.get(week_type, "white")
+                        "TAPER 1": "magenta", "TAPER 2": "bright_magenta", "MAINTENANCE": "black"
+                    }.get(week_type, "black")
 
                     # Get activity name
                     activity = plan.get('activity', 'Unknown')
@@ -2378,7 +2544,6 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
         console.print(f"[red]❌ {error_msg}[/red]")
 
     # Summary
-    console.print(f"\n[bold green]🏁 Workflow Complete![/bold green]")
 
     if errors:
         console.print(f"\n[yellow]⚠️  {len(errors)} errors occurred:[/yellow]")
@@ -2386,125 +2551,6 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
             console.print(f"  • {error}")
         console.print(f"\n[cyan]You can run individual commands to fix specific issues[/cyan]")
     else:
-        # Step 7: Comprehensive Analysis Summary
-        console.print("")  # Spacing
-        step7_header = Panel("🏆 Step 7: Final Analysis Dashboard", box=box.HEAVY, style="bold blue")
-        console.print(step7_header)
-
-        try:
-            # Get latest analysis for summary
-            analyzer = get_integrated_analyzer("user")
-
-            analysis = analyzer.analyze_with_advanced_models(days_back=90)
-
-            if analysis and 'combined' in analysis and len(analysis['combined']) > 0:
-                combined = analysis['combined']
-                latest = combined.iloc[-1]
-                recent_30d = combined.tail(30)
-
-                # Create four-row summary table as specified
-                summary_table = Table(box=box.ROUNDED)
-                summary_table.add_column("Category", style="bold cyan", width=20)
-                summary_table.add_column("Key Metrics", width=50)
-
-                # Row 1: Current Fitness - Key CTL/TSB/Readiness values
-                try:
-                    fitness_val = float(latest['ff_fitness']) if 'ff_fitness' in latest else 0
-                    form_val = float(latest['ff_form']) if 'ff_form' in latest else 0
-                    readiness_val = float(latest['composite_readiness']) if 'composite_readiness' in latest else 0
-                    summary_table.add_row(
-                        "Current Fitness",
-                        f"CTL: {fitness_val:.0f} | TSB: {form_val:.1f} | Readiness: {readiness_val:.0f}%"
-                    )
-                except (TypeError, ValueError) as e:
-                    summary_table.add_row("Current Fitness", "Data processing error")
-
-                # Row 2: Training Load - 30-day total and daily average
-                try:
-                    total_load = float(recent_30d['load'].sum())
-                    avg_load = float(recent_30d['load'].mean())
-                    summary_table.add_row(
-                        "Training Load",
-                        f"30-day Total: {total_load:.0f} TSS | Daily Average: {avg_load:.0f} TSS"
-                    )
-                except (TypeError, ValueError):
-                    summary_table.add_row("Training Load", "Data processing error")
-
-                # Row 3: Recovery & Risk - Overall recovery % and Overtraining status
-                try:
-                    overtraining_status = "YES" if latest['overtraining_risk'] else "NO"
-                    recovery_color = "red" if latest['overtraining_risk'] else "green"
-                    recovery_val = float(latest['overall_recovery']) if 'overall_recovery' in latest else 80.0
-                    summary_table.add_row(
-                        "Recovery & Risk",
-                        f"Overall Recovery: {recovery_val:.0f}% | Overtraining Risk: [{recovery_color}]{overtraining_status}[/{recovery_color}]"
-                    )
-                except (TypeError, ValueError, KeyError):
-                    summary_table.add_row("Recovery & Risk", "Data processing error")
-
-                # Row 4: 7-Day Trend - Key performance vectors
-                try:
-                    recent_7d = combined.tail(7)
-                    # Ensure numeric values for arithmetic
-                    fitness_change = float(recent_7d['ff_fitness'].iloc[-1]) - float(recent_7d['ff_fitness'].iloc[0])
-                    fitness_trend = "↗️" if fitness_change > 0 else "↘️"
-                    form_trend = "↗️" if len(combined) > 7 and float(combined['ff_form'].iloc[-1]) > float(combined['ff_form'].iloc[-7]) else "↘️"
-                    load_avg = float(recent_7d['load'].mean())
-                    summary_table.add_row(
-                        "7-Day Trend",
-                        f"Fitness: {fitness_change:+.1f} {fitness_trend} | Form: {form_trend} | Load Avg: {load_avg:.0f} TSS"
-                    )
-                except (TypeError, ValueError, KeyError, IndexError):
-                    summary_table.add_row("7-Day Trend", "Insufficient data for trend analysis")
-
-                console.print(summary_table)
-
-                # Key Recommendations - Professional Panel
-                recommendations = []
-
-                # Get avg_load safely (might not be defined if training load calculation failed)
-                try:
-                    avg_load_for_rec = float(recent_30d['load'].mean()) if 'load' in recent_30d.columns else 50.0
-                except:
-                    avg_load_for_rec = 50.0  # Default value if calculation fails
-
-                # Priority 1: Safety and overtraining check
-                if latest['overtraining_risk']:
-                    recommendations.append("🚨 [red]IMMEDIATE REST REQUIRED[/red] - Overtraining detected")
-                    recommendations.append("😴 [yellow]ACTIVE RECOVERY ONLY[/yellow] - Light movement, focus on sleep")
-                elif latest['composite_readiness'] > 80 and latest['ff_form'] > 20:
-                    recommendations.append("🎯 [green]COMPETITION READY[/green] - Peak form achieved")
-                    recommendations.append("🚀 [green]PEAK TRAINING WINDOW[/green] - Ready for high intensity")
-                elif latest['composite_readiness'] < 40:
-                    recommendations.append("😴 [yellow]RECOVERY FOCUS[/yellow] - Prioritize easy training and sleep")
-                    recommendations.append("📉 [cyan]REDUCE LOAD[/cyan] - Allow fitness to consolidate")
-                else:
-                    recommendations.append("📈 [cyan]PROGRESSIVE TRAINING[/cyan] - Balanced load progression")
-                    if latest['ff_form'] < -10:
-                        recommendations.append("⚡ [yellow]BUILD PHASE[/yellow] - Focus on base fitness development")
-                    elif avg_load_for_rec < 60:
-                        recommendations.append("📊 [cyan]INCREASE VOLUME[/cyan] - Room for progressive load increase")
-
-                # Format as bulleted list in a professional panel
-                rec_content = "\n".join([f"• {rec}" for rec in recommendations[:3]])  # Limit to top 3 as specified
-
-                recommendations_panel = Panel(
-                    rec_content,
-                    title="🎯 Key Recommendations",
-                    box=box.ROUNDED,
-                    border_style="yellow"
-                )
-                console.print(f"\n")
-                console.print(recommendations_panel)
-
-            # Step 7 completion footer
-
-        except TypeError as te:
-            # Specific handling for datetime arithmetic errors
-            console.print(f"[red]❌ Summary generation failed due to data type issue[/red]")
-            console.print(f"[yellow]ℹ️ Using simplified summary instead[/yellow]")
-        except Exception as e:
-            console.print(f"[red]❌ Summary generation failed: {e}[/red]")
 
         console.print(f"\n[cyan]🧬 Models active • 📊 Multi-system analysis • 🎯 Optimal recommendations ready[/cyan]")
 
@@ -2567,7 +2613,7 @@ def show_training_plan(duration):
                         'day': actual_day,
                         'date': actual_date.strftime('%m/%d'),
                         'date_obj': actual_date,  # Keep the datetime object for day name conversion
-                        'recommendation': workout.intensity_level.upper(),
+                        'recommendation': get_intensity_from_load(float(workout.planned_load)),
                         'activity': f"{workout.title} ({workout.total_duration_min}m)",
                         'second_activity': (
                             f"{workout.second_activity_title} ({workout.second_activity_duration}m)"
@@ -2639,8 +2685,8 @@ def show_training_plan(duration):
                         week_type_color = {
                             "BUILD 1": "bright_green", "BUILD 2": "green", "BUILD 3": "yellow",
                             "RECOVERY": "bright_cyan", "PEAK 1": "bright_red", "PEAK 2": "red",
-                            "TAPER 1": "magenta", "TAPER 2": "bright_magenta", "MAINTENANCE": "white"
-                        }.get(week_type, "white")
+                            "TAPER 1": "magenta", "TAPER 2": "bright_magenta", "MAINTENANCE": "black"
+                        }.get(week_type, "black")
 
                         # Calculate weekly time totals for this week
                         week_plans = [p for p in training_plan if (p['day'] - 1) // 7 == week_num]
@@ -2721,7 +2767,7 @@ def show_training_plan(duration):
                         "HARD": "magenta",
                         "PEAK": "bold magenta"
                     }
-                    rec_color = rec_colors.get(plan_day['recommendation'], "white")
+                    rec_color = rec_colors.get(plan_day['recommendation'], "black")
 
                     # Get week type for this day
                     week_types = {
@@ -2741,8 +2787,8 @@ def show_training_plan(duration):
                     week_type_color = {
                         "BUILD 1": "bright_green", "BUILD 2": "green", "BUILD 3": "yellow",
                         "RECOVERY": "bright_cyan", "PEAK 1": "bright_red", "PEAK 2": "red",
-                        "TAPER 1": "magenta", "TAPER 2": "bright_magenta", "MAINTENANCE": "white"
-                    }.get(week_type, "white")
+                        "TAPER 1": "magenta", "TAPER 2": "bright_magenta", "MAINTENANCE": "black"
+                    }.get(week_type, "black")
 
                     # Get activity name
                     activity = plan_day.get('activity', 'Unknown')
@@ -2905,7 +2951,7 @@ def adjust_plan(recovery_score, hrv_status, sleep_score, stress_level):
         table.add_column("Type", style="yellow")
         table.add_column("Reason", style="cyan")
         table.add_column("Confidence", style="green")
-        table.add_column("Notes", style="white")
+        table.add_column("Notes", style="black")
 
         for adj in adjustments[:5]:  # Show top 5
             table.add_row(
@@ -3031,7 +3077,7 @@ def fitness_state(days, detailed):
 
         table = Table(box=box.ROUNDED)
         table.add_column("Metric", style="cyan")
-        table.add_column("Value", style="white")
+        table.add_column("Value", style="black")
         table.add_column("Status", style="green")
 
         # Fitness-Fatigue metrics

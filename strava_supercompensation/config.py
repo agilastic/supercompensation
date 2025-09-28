@@ -201,6 +201,33 @@ class Config:
         "FARTLEK": float(os.getenv("DURATION_MULTIPLIER_FARTLEK", "0.9")),
     }
 
+    # TSS per Minute Minimum Thresholds (for workout intensity validation)
+    MIN_TSS_PER_MINUTE = {
+        "RECOVERY": float(os.getenv("MIN_TSS_PER_MINUTE_RECOVERY", "0.4")),
+        "AEROBIC": float(os.getenv("MIN_TSS_PER_MINUTE_AEROBIC", "0.6")),
+        "LONG": float(os.getenv("MIN_TSS_PER_MINUTE_LONG", "0.7")),
+        "FARTLEK": float(os.getenv("MIN_TSS_PER_MINUTE_FARTLEK", "0.9")),
+        "TEMPO": float(os.getenv("MIN_TSS_PER_MINUTE_TEMPO", "1.2")),
+        "THRESHOLD": float(os.getenv("MIN_TSS_PER_MINUTE_THRESHOLD", "1.3")),
+        "INTERVALS": float(os.getenv("MIN_TSS_PER_MINUTE_INTERVALS", "1.5")),
+        "VO2MAX": float(os.getenv("MIN_TSS_PER_MINUTE_VO2MAX", "1.7")),
+        "NEUROMUSCULAR": float(os.getenv("MIN_TSS_PER_MINUTE_NEUROMUSCULAR", "1.2")),
+    }
+
+    # TSS per Minute Target Rates (for duration calculation)
+    TSS_PER_MINUTE_RATES = {
+        "REST": float(os.getenv("TSS_PER_MINUTE_REST", "0.0")),
+        "RECOVERY": float(os.getenv("TSS_PER_MINUTE_RECOVERY", "0.6")),
+        "AEROBIC": float(os.getenv("TSS_PER_MINUTE_AEROBIC", "0.8")),
+        "LONG": float(os.getenv("TSS_PER_MINUTE_LONG", "0.9")),
+        "FARTLEK": float(os.getenv("TSS_PER_MINUTE_FARTLEK", "1.2")),
+        "TEMPO": float(os.getenv("TSS_PER_MINUTE_TEMPO", "1.4")),
+        "THRESHOLD": float(os.getenv("TSS_PER_MINUTE_THRESHOLD", "1.6")),
+        "INTERVALS": float(os.getenv("TSS_PER_MINUTE_INTERVALS", "1.8")),
+        "VO2MAX": float(os.getenv("TSS_PER_MINUTE_VO2MAX", "2.0")),
+        "NEUROMUSCULAR": float(os.getenv("TSS_PER_MINUTE_NEUROMUSCULAR", "1.5")),
+    }
+
     # Recovery Time Multipliers (for calculating recovery needs)
     RECOVERY_MULTIPLIERS = {
         "REST": float(os.getenv("RECOVERY_MULTIPLIER_REST", "0.0")),

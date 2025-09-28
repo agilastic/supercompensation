@@ -61,13 +61,6 @@ class BanisterModel:
         MAX_FITNESS = config.MAX_FITNESS
         MAX_FATIGUE = config.MAX_FATIGUE
 
-        # Check for extreme loads and warn
-        extreme_loads = training_loads > MAX_DAILY_LOAD
-        if np.any(extreme_loads):
-            extreme_count = np.sum(extreme_loads)
-            max_extreme = np.max(training_loads[extreme_loads])
-            logging.warning(f"Found {extreme_count} extreme training loads (max: {max_extreme:.1f}), capping at {MAX_DAILY_LOAD}")
-
         # Cap training loads at physiologically reasonable values
         training_loads = np.clip(training_loads, 0, MAX_DAILY_LOAD)
 

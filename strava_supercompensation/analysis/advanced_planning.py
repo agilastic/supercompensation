@@ -254,6 +254,27 @@ class TrainingPlanGenerator:
         """
         constraints = constraints or {}
 
+        # CRITICAL SAFETY CHECK: Prevent training plan generation during overtraining
+        try:
+            from .model_integration import get_integrated_analyzer
+            analyzer = get_integrated_analyzer(self.user_id)
+            current_state = analyzer.get_daily_recommendation()
+
+            # Check if overtraining is detected
+            if current_state and current_state.get('overtraining_risk', False):
+                self.logger.warning("🚨 SAFETY OVERRIDE: Overtraining detected - refusing to generate training plan")
+                return {
+                    'error': 'OVERTRAINING_DETECTED',
+                    'message': '🚨 IMMEDIATE REST REQUIRED - Training plan generation blocked for safety',
+                    'recommendation': 'Focus on recovery: sleep, nutrition, light movement only. Consult a coach or sports medicine professional.',
+                    'daily_workouts': [],
+                    'weekly_summary': [],
+                    'fitness_progression': {'dates': [], 'fitness': [], 'fatigue': [], 'form': []},
+                    'recovery_status': {'dates': [], 'overall': [], 'metabolic': [], 'neural': [], 'structural': []}
+                }
+        except Exception as e:
+            self.logger.warning(f"Could not check overtraining status: {e}")
+
         # Enhanced mesocycle planning for extended durations
         mesocycles = self._plan_mesocycle_sequence(duration_days, goal, target_event_date)
         if len(mesocycles) > 1:
@@ -677,7 +698,7 @@ class TrainingPlanGenerator:
 
                         # Log safety interventions
                         if constrained_load < original_load:
-                            self.logger.warning(f"SAFETY: Day {week_start + i + 1}: Capped dangerous load {original_load:.0f} → {constrained_load:.0f} TSS ({constraint_reason})")
+                            self.logger.debug(f"SAFETY: Day {week_start + i + 1}: Capped dangerous load {original_load:.0f} → {constrained_load:.0f} TSS ({constraint_reason})")
 
             # Move to next mesocycle (typically 4 weeks = 28 days)
             day_offset += len(weekly_load_factors) * 7
@@ -757,22 +778,51 @@ class TrainingPlanGenerator:
                 moved_day = moderate_days.pop()
                 easy_days.append(moved_day)
 
-            # LOAD DISTRIBUTION following polarized principles
-            # Hard days: High quality, lower volume per session
+            # LOAD DISTRIBUTION following sports science and intensity requirements
+            # FIXED: High-intensity workouts need much more TSS for realistic durations
+
+            # Calculate minimum required TSS for realistic workout durations
+            min_hard_tss_per_workout = 90   # Minimum for 45-60min threshold/intervals
+            min_moderate_tss_per_workout = 70  # Minimum for 50-60min tempo
+            min_easy_tss_per_workout = 50   # Minimum for 60-90min aerobic
+
+            # Calculate required minimums
+            hard_minimum_total = len(hard_days) * min_hard_tss_per_workout
+            moderate_minimum_total = len(moderate_days) * min_moderate_tss_per_workout
+            easy_minimum_total = len(easy_days) * min_easy_tss_per_workout
+
+            total_minimums = hard_minimum_total + moderate_minimum_total + easy_minimum_total
+
+            # If weekly target is too low for realistic workouts, scale up the weekly target
+            if total_minimums > weekly_target_load:
+                self.logger.warning(f"Weekly load {weekly_target_load:.0f} TSS too low for realistic workouts. "
+                                  f"Need minimum {total_minimums:.0f} TSS. Scaling up.")
+                weekly_target_load = total_minimums * 1.1  # 10% buffer
+
+            # Distribute remaining load above minimums proportionally
+            remaining_load = weekly_target_load - total_minimums
+
+            # Hard days: Minimum + proportional share of remaining
             if hard_days:
-                hard_load_per_day = weekly_target_load * 0.25 / len(hard_days)  # 25% on hard days
+                hard_share = 0.4  # 40% of remaining load goes to hard days
+                hard_extra = remaining_load * hard_share / len(hard_days)
+                hard_load_per_day = min_hard_tss_per_workout + hard_extra
                 for day in hard_days:
                     loads[day] = hard_load_per_day
 
-            # Moderate days: Tempo/threshold work
+            # Moderate days: Minimum + proportional share of remaining
             if moderate_days:
-                moderate_load_per_day = weekly_target_load * 0.20 / len(moderate_days)  # 20% on moderate
+                moderate_share = 0.25  # 25% of remaining load
+                moderate_extra = remaining_load * moderate_share / len(moderate_days)
+                moderate_load_per_day = min_moderate_tss_per_workout + moderate_extra
                 for day in moderate_days:
                     loads[day] = moderate_load_per_day
 
-            # Easy days: Base building volume (majority of training)
+            # Easy days: Minimum + remaining load
             if easy_days:
-                easy_load_per_day = weekly_target_load * 0.55 / len(easy_days)  # 55% on easy days
+                easy_share = 0.35  # 35% of remaining load
+                easy_extra = remaining_load * easy_share / len(easy_days)
+                easy_load_per_day = min_easy_tss_per_workout + easy_extra
                 for day in easy_days:
                     loads[day] = easy_load_per_day
 
@@ -1045,7 +1095,7 @@ class TrainingPlanGenerator:
             else:
                 # Cap at safe limit
                 adjusted_load = SAFE_WORKOUT_LIMIT
-                self.logger.warning(f"SAFETY CAP: {date.strftime('%Y-%m-%d')} {primary_sport} - Reduced {original_adjusted:.0f} → {adjusted_load:.0f} TSS")
+                self.logger.debug(f"SAFETY CAP: {date.strftime('%Y-%m-%d')} {primary_sport} - Reduced {original_adjusted:.0f} → {adjusted_load:.0f} TSS")
 
         # Calculate duration based on load and workout type
         duration = self._calculate_duration(adjusted_load, workout_type)
@@ -1129,7 +1179,7 @@ class TrainingPlanGenerator:
             warmup_min=structure['warmup'],
             main_set_min=structure['main'],
             cooldown_min=structure['cooldown'],
-            title=self._generate_workout_title(workout_type, primary_sport),
+            title=self._generate_workout_title(workout_type, primary_sport, intensity_level),
             description=self._generate_workout_description(
                 workout_type, duration, adjusted_load
             ),
@@ -1285,7 +1335,7 @@ class TrainingPlanGenerator:
                     workouts[i].intensity_level = 'easy'
                     workouts[i].description = f"Deep Recovery Day {i+1} - Light movement only"
                     selected_sport = "Walk" if i % 2 == 0 else self._select_sport(i, WorkoutType.RECOVERY)
-                    workouts[i].title = self._generate_workout_title(WorkoutType.RECOVERY, selected_sport)
+                    workouts[i].title = self._generate_workout_title(WorkoutType.RECOVERY, selected_sport, 'easy')
 
         # Week 2: Active Recovery - Structured movement with purpose
         for i in range(7, min(14, len(workouts))):
@@ -1302,14 +1352,14 @@ class TrainingPlanGenerator:
                     workouts[i].intensity_level = 'easy'
                     workouts[i].description = f"Active Recovery Week - Zone 2 aerobic"
                     selected_sport = self._select_sport(i, WorkoutType.AEROBIC)
-                    workouts[i].title = self._generate_workout_title(WorkoutType.AEROBIC, selected_sport)
+                    workouts[i].title = self._generate_workout_title(WorkoutType.AEROBIC, selected_sport, 'easy')
                 else:
                     workouts[i].workout_type = WorkoutType.RECOVERY
                     workouts[i].planned_load = 30 + (i-7) * 1  # 30-37 TSS
                     workouts[i].total_duration_min = 40 + (i-7) * 3
                     workouts[i].description = "Recovery with mobility focus"
                     selected_sport = "Walk" if i % 3 == 0 else self._select_sport(i, WorkoutType.RECOVERY)
-                    workouts[i].title = self._generate_workout_title(WorkoutType.RECOVERY, selected_sport)
+                    workouts[i].title = self._generate_workout_title(WorkoutType.RECOVERY, selected_sport, 'easy')
 
         # Week 3: Base Building - Return to structure with strength
         for i in range(14, min(21, len(workouts))):
@@ -1333,7 +1383,7 @@ class TrainingPlanGenerator:
                         workouts[i].total_duration_min = 75 + (i-14) * 5
                         workouts[i].description = f"Base Building Week - Aerobic foundation"
                         selected_sport = self._select_sport(i, WorkoutType.AEROBIC)
-                        workouts[i].title = self._generate_workout_title(WorkoutType.AEROBIC, selected_sport)
+                        workouts[i].title = self._generate_workout_title(WorkoutType.AEROBIC, selected_sport, 'easy')
                 else:
                     workouts[i].workout_type = WorkoutType.RECOVERY
                     workouts[i].planned_load = 40 + (i-14) * 1
@@ -1352,7 +1402,7 @@ class TrainingPlanGenerator:
                     workouts[i].intensity_level = 'moderate'
                     workouts[i].description = f"Assessment Week - Testing readiness"
                     selected_sport = self._select_sport(i, WorkoutType.TEMPO)
-                    workouts[i].title = self._generate_workout_title(WorkoutType.TEMPO, selected_sport)
+                    workouts[i].title = self._generate_workout_title(WorkoutType.TEMPO, selected_sport, 'moderate')
                 else:
                     workouts[i].workout_type = WorkoutType.AEROBIC
                     workouts[i].planned_load = 50 + (i-21) * 2
@@ -1827,40 +1877,65 @@ class TrainingPlanGenerator:
             return []
 
     def _calculate_duration(self, load: float, workout_type: WorkoutType) -> int:
-        """Calculate realistic workout duration from load and type."""
-        # CRITICAL: Ensure perfect load/duration consistency
+        """Calculate realistic workout duration from load and type using proper TSS/minute ratios."""
         if load == 0 or workout_type == WorkoutType.REST:
             return 0
 
-        # FIXED: More realistic TSS to duration conversion
-        # Base conversion: 1 TSS ≈ 1 minute for moderate intensity
-        base_duration = load * 1.0
-
-        # FIXED: Use configured duration multipliers from .env
-        duration_multipliers = {
-            WorkoutType.REST: self.config.DURATION_MULTIPLIERS["REST"],
-            WorkoutType.RECOVERY: self.config.DURATION_MULTIPLIERS["RECOVERY"],
-            WorkoutType.AEROBIC: self.config.DURATION_MULTIPLIERS["AEROBIC"],
-            WorkoutType.TEMPO: self.config.DURATION_MULTIPLIERS["TEMPO"],
-            WorkoutType.THRESHOLD: self.config.DURATION_MULTIPLIERS["THRESHOLD"],
-            WorkoutType.VO2MAX: self.config.DURATION_MULTIPLIERS["VO2MAX"],
-            WorkoutType.NEUROMUSCULAR: self.config.DURATION_MULTIPLIERS["NEUROMUSCULAR"],
-            WorkoutType.LONG: self.config.DURATION_MULTIPLIERS["LONG"],
-            WorkoutType.INTERVALS: self.config.DURATION_MULTIPLIERS["INTERVALS"],
-            WorkoutType.FARTLEK: self.config.DURATION_MULTIPLIERS["FARTLEK"]
+        # FIXED: Proper TSS per minute based on workout intensity from config
+        # Higher intensity = More TSS per minute = Shorter duration for same load
+        tss_per_minute = {
+            WorkoutType.REST: self.config.TSS_PER_MINUTE_RATES["REST"],
+            WorkoutType.RECOVERY: self.config.TSS_PER_MINUTE_RATES["RECOVERY"],
+            WorkoutType.AEROBIC: self.config.TSS_PER_MINUTE_RATES["AEROBIC"],
+            WorkoutType.LONG: self.config.TSS_PER_MINUTE_RATES["LONG"],
+            WorkoutType.FARTLEK: self.config.TSS_PER_MINUTE_RATES["FARTLEK"],
+            WorkoutType.TEMPO: self.config.TSS_PER_MINUTE_RATES["TEMPO"],
+            WorkoutType.THRESHOLD: self.config.TSS_PER_MINUTE_RATES["THRESHOLD"],
+            WorkoutType.INTERVALS: self.config.TSS_PER_MINUTE_RATES["INTERVALS"],
+            WorkoutType.VO2MAX: self.config.TSS_PER_MINUTE_RATES["VO2MAX"],
+            WorkoutType.NEUROMUSCULAR: self.config.TSS_PER_MINUTE_RATES["NEUROMUSCULAR"],
         }
 
-        multiplier = duration_multipliers.get(workout_type, 1.0)
-        raw_duration = base_duration * multiplier
+        tss_rate = tss_per_minute.get(workout_type, 1.0)
 
-        # Round to nearest 5 minutes as requested
+        # Calculate duration: TSS ÷ TSS_per_minute = minutes
+        raw_duration = load / tss_rate
+
+        # Round to nearest 5 minutes
         rounded_duration = round(raw_duration / 5) * 5
 
-        # Ensure minimum duration for non-rest workouts
-        if workout_type != WorkoutType.REST and rounded_duration < 20:
-            rounded_duration = 20
+        # Ensure realistic duration ranges by workout type
+        min_durations = {
+            WorkoutType.RECOVERY: 20,
+            WorkoutType.AEROBIC: 30,
+            WorkoutType.LONG: 60,
+            WorkoutType.TEMPO: 30,
+            WorkoutType.THRESHOLD: 25,
+            WorkoutType.INTERVALS: 30,
+            WorkoutType.VO2MAX: 25,
+            WorkoutType.NEUROMUSCULAR: 15,
+            WorkoutType.FARTLEK: 30,
+        }
 
-        return int(rounded_duration)
+        max_durations = {
+            WorkoutType.RECOVERY: 90,
+            WorkoutType.AEROBIC: 120,
+            WorkoutType.LONG: 180,
+            WorkoutType.TEMPO: 90,
+            WorkoutType.THRESHOLD: 75,
+            WorkoutType.INTERVALS: 90,
+            WorkoutType.VO2MAX: 60,
+            WorkoutType.NEUROMUSCULAR: 45,
+            WorkoutType.FARTLEK: 90,
+        }
+
+        min_dur = min_durations.get(workout_type, 20)
+        max_dur = max_durations.get(workout_type, 120)
+
+        # Clamp to realistic ranges
+        final_duration = max(min_dur, min(max_dur, rounded_duration))
+
+        return int(final_duration)
 
     def _build_workout_structure(
         self,
@@ -1964,9 +2039,20 @@ class TrainingPlanGenerator:
     def _generate_workout_title(
         self,
         workout_type: WorkoutType,
-        sport: str
+        sport: str,
+        intensity_level: str = 'moderate'
     ) -> str:
         """Generate descriptive workout title with proper sport-specific terminology."""
+
+        # Define strength/resistance training activities
+        strength_activities = {
+            'weighttraining', 'weights', 'strength', 'strengthtraining',
+            'workout', 'crosstraining', 'resistance', 'gym'
+        }
+
+        # Universal naming for strength training
+        if sport.lower() in strength_activities:
+            return "Weight Training"
 
         # Sport-specific naming for running
         if sport.lower() == "run":
@@ -2216,7 +2302,7 @@ class TrainingPlanGenerator:
                     workout.intensity_level = 'easy'  # This is the absolute rule
 
                     # Regenerate title to match recovery state
-                    workout.title = self._generate_workout_title(WorkoutType.RECOVERY, workout.primary_sport)
+                    workout.title = self._generate_workout_title(WorkoutType.RECOVERY, workout.primary_sport, 'easy')
                     workout.description = f"Recovery week - easy {workout.primary_sport.lower()} only"
 
                     # Cap load at recovery levels
@@ -2253,7 +2339,7 @@ class TrainingPlanGenerator:
                         # No long sessions during taper
                         workout.workout_type = WorkoutType.AEROBIC
                         workout.intensity_level = 'easy'
-                        workout.title = self._generate_workout_title(WorkoutType.AEROBIC, workout.primary_sport)
+                        workout.title = self._generate_workout_title(WorkoutType.AEROBIC, workout.primary_sport, 'easy')
                     elif workout.workout_type in [WorkoutType.VO2MAX, WorkoutType.INTERVALS]:
                         # Very brief race-pace touches only
                         workout.duration = min(45, workout.duration)
@@ -2481,7 +2567,36 @@ class TrainingPlanGenerator:
                 validated_workout.description += " (Load capped for safety)"
                 issues_fixed += 1
 
-            # VALIDATION 3: Activity Name Truncation Prevention
+            # VALIDATION 3: TSS/Intensity Consistency Check (Safety Net Only)
+            # NOTE: Root cause fixed in load distribution, this is just a safety net
+            if validated_workout.workout_type != WorkoutType.REST and validated_workout.planned_load > 0:
+                # Use minimum TSS per minute thresholds from config
+                min_tss_per_minute = {
+                    WorkoutType.RECOVERY: self.config.MIN_TSS_PER_MINUTE["RECOVERY"],
+                    WorkoutType.AEROBIC: self.config.MIN_TSS_PER_MINUTE["AEROBIC"],
+                    WorkoutType.LONG: self.config.MIN_TSS_PER_MINUTE["LONG"],
+                    WorkoutType.FARTLEK: self.config.MIN_TSS_PER_MINUTE["FARTLEK"],
+                    WorkoutType.TEMPO: self.config.MIN_TSS_PER_MINUTE["TEMPO"],
+                    WorkoutType.THRESHOLD: self.config.MIN_TSS_PER_MINUTE["THRESHOLD"],
+                    WorkoutType.INTERVALS: self.config.MIN_TSS_PER_MINUTE["INTERVALS"],
+                    WorkoutType.VO2MAX: self.config.MIN_TSS_PER_MINUTE["VO2MAX"],
+                    WorkoutType.NEUROMUSCULAR: self.config.MIN_TSS_PER_MINUTE["NEUROMUSCULAR"],
+                }
+
+                min_tss_rate = min_tss_per_minute.get(validated_workout.workout_type, 0.8)
+                actual_tss_rate = validated_workout.planned_load / max(validated_workout.total_duration_min, 1)
+
+                # Only fix if severely wrong (should be rare now)
+                if actual_tss_rate < (min_tss_rate * 0.7):  # Only if 30% below minimum
+                    required_tss = validated_workout.total_duration_min * min_tss_rate
+                    self.logger.error(f"VALIDATION EMERGENCY FIX: Day {validated_workout.day_number} - {validated_workout.workout_type.value} "
+                                    f"TSS critically low ({validated_workout.planned_load:.0f}) for {validated_workout.total_duration_min}min. "
+                                    f"Emergency adjustment to {required_tss:.0f} TSS")
+                    validated_workout.planned_load = required_tss
+                    validated_workout.description += f" (Emergency TSS fix - investigate load distribution)"
+                    issues_fixed += 1
+
+            # VALIDATION 4: Activity Name Truncation Prevention
             if validated_workout.title and len(validated_workout.title) > 25:
                 # Ensure activity names fit in display columns
                 original_title = validated_workout.title
@@ -2491,10 +2606,10 @@ class TrainingPlanGenerator:
 
             validated_workouts.append(validated_workout)
 
-        # VALIDATION 4: Final chronological sort to ensure proper date sequencing
+        # VALIDATION 5: Final chronological sort to ensure proper date sequencing
         validated_workouts.sort(key=lambda w: w.date)
 
-        # VALIDATION 5: Strength Training Deficit Check (15-20% minimum requirement)
+        # VALIDATION 6: Strength Training Deficit Check (15-20% minimum requirement)
         total_training_days = len([w for w in validated_workouts if w.workout_type != WorkoutType.REST])
         strength_days = len([w for w in validated_workouts if
                            (w.primary_sport in ["WeightTraining", "Workout"]) or
@@ -2522,7 +2637,7 @@ class TrainingPlanGenerator:
                     issues_fixed += 1
                     self.logger.info(f"VALIDATION FIX: Added strength training to Day {workout.day_number}")
 
-        # VALIDATION 6: Fix day numbering AFTER sorting to ensure sequential numbering
+        # VALIDATION 7: Fix day numbering AFTER sorting to ensure sequential numbering
         for i, validated_workout in enumerate(validated_workouts):
             expected_day = i + 1
             if validated_workout.day_number != expected_day:

@@ -73,3 +73,4 @@ data/
 logs/
 tokens/
 .strava_cache/
+rhr_debug.log

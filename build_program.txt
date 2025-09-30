@@ -1,0 +1,80 @@
+----------------------------------------------------------------
+Program: Max Strength Program (4w)
+
+Program parameters
+  duration: 4
+  reps_per_exercise: 20
+  intensity: 85
+  units: kg
+---------------------------------------------------------------- 
+Exercise information
+  Lower Power Day
+   Back Squat          78.8kg -> 94.5kg
+    reps: [3, 6]   weekly inc.: 5%
+   Romanian Deadlift   75.6kg -> 94.5kg
+    reps: [3, 6]   weekly inc.: 6.25%
+   Box Jump            4 x 5 explosive
+   Hanging Leg Raise   3 x 8-12
+  Upper Power Day
+   Bench Press         67.2kg -> 79.8kg
+    reps: [3, 5]   weekly inc.: 4.69%
+   Weighted Pull-up    25.2kg ->  42kg 
+    reps: [3, 6]   weekly inc.: 16.67%
+   Barbell Row          63kg -> 75.6kg 
+    reps: [4, 6]   weekly inc.: 5%
+   Pallof Press        3 x 10-12 each side
+----------------------------------------------------------------
+Program
+ Week 1
+  Lower Power Day
+   Back Squat          6 x 65kg    6 x 65kg    6 x 65kg    6 x 65kg      
+   Romanian Deadlift   6 x 62.5kg  6 x 62.5kg  6 x 62.5kg  6 x 62.5kg    
+   Box Jump            4 x 5 explosive
+   Hanging Leg Raise   3 x 8-12
+
+  Upper Power Day
+   Bench Press         5 x 57.5kg  5 x 57.5kg  5 x 57.5kg  5 x 57.5kg  5 x 57.5kg    
+   Weighted Pull-up    6 x 20kg    6 x 20kg    6 x 20kg    6 x 20kg      
+   Barbell Row         6 x 50kg    6 x 50kg    6 x 50kg    6 x 50kg      
+   Pallof Press        3 x 10-12 each side
+
+ Week 2
+  Lower Power Day
+   Back Squat          6 x 70kg    5 x 72.5kg  5 x 72.5kg  5 x 72.5kg    
+   Romanian Deadlift   6 x 67.5kg  5 x 70kg    5 x 70kg    5 x 70kg      
+   Box Jump            4 x 5 explosive
+   Hanging Leg Raise   3 x 8-12
+
+  Upper Power Day
+   Bench Press         5 x 60kg    5 x 60kg    5 x 60kg    5 x 60kg      
+   Weighted Pull-up    6 x 25kg    5 x 27.5kg  5 x 27.5kg  5 x 27.5kg    
+   Barbell Row         6 x 55kg    5 x 57.5kg  5 x 57.5kg  5 x 57.5kg    
+   Pallof Press        3 x 10-12 each side
+
+ Week 3
+  Lower Power Day
+   Back Squat          5 x 75kg    5 x 75kg    4 x 80kg    3 x 82.5kg  3 x 82.5kg    
+   Romanian Deadlift   5 x 75kg    5 x 75kg    4 x 77.5kg  3 x 80kg    3 x 80kg      
+   Box Jump            4 x 5 explosive
+   Hanging Leg Raise   3 x 8-12
+
+  Upper Power Day
+   Bench Press         5 x 65kg    5 x 65kg    4 x 67.5kg  3 x 70kg    3 x 70kg      
+   Weighted Pull-up    5 x 32.5kg  5 x 32.5kg  4 x 32.5kg  3 x 35kg    3 x 35kg      
+   Barbell Row         5 x 60kg    5 x 60kg    4 x 62.5kg  4 x 62.5kg    
+   Pallof Press        3 x 10-12 each side
+
+ Week 4
+  Lower Power Day
+   Back Squat          4 x 82.5kg  3 x 85kg    3 x 85kg    3 x 85kg    3 x 85kg      
+   Romanian Deadlift   4 x 82.5kg  3 x 85kg    3 x 85kg    3 x 85kg    3 x 85kg      
+   Box Jump            4 x 5 explosive
+   Hanging Leg Raise   3 x 8-12
+
+  Upper Power Day
+   Bench Press         4 x 70kg    3 x 72.5kg  3 x 72.5kg  3 x 72.5kg  3 x 72.5kg    
+   Weighted Pull-up    4 x 37.5kg  3 x 37.5kg  3 x 37.5kg  3 x 37.5kg  3 x 37.5kg    
+   Barbell Row         4 x 65kg    4 x 65kg    4 x 65kg    4 x 65kg      
+   Pallof Press        3 x 10-12 each side
+
+----------------------------------------------------------------

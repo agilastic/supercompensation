@@ -68,7 +68,7 @@ def handle_auth_error(error: Exception, auth_manager, operation_name: str = "ope
     error_str = str(error)
 
     if "401" in error_str and "Unauthorized" in error_str:
-        console.print(f"[yellow]⚠️  Authentication token expired. Re-authenticating...[/yellow]")
+        console.print(f"[orange]⚠️  Authentication token expired. Re-authenticating...[/orange]")
 
         if auth_manager.authenticate():
             console.print(f"[green]✅ Re-authentication successful! Retrying {operation_name}...[/green]")
@@ -95,8 +95,8 @@ def auth():
         config.validate()
     except ValueError as e:
         console.print(f"[red]❌ Configuration Error: {e}[/red]")
-        console.print("\n[yellow]Please create a .env file with your Strava API credentials.[/yellow]")
-        console.print("[yellow]See .env.example for reference.[/yellow]")
+        console.print("\n[orange]Please create a .env file with your Strava API credentials.[/orange]")
+        console.print("[orange]See .env.example for reference.[/orange]")
         return
 
     auth_manager = AuthManager()
@@ -124,7 +124,7 @@ def sync(days):
 
     auth_manager = AuthManager()
     if not auth_manager.is_authenticated():
-        console.print("[yellow]⚠️  No valid authentication found. Attempting to authenticate...[/yellow]")
+        console.print("[orange]⚠️  No valid authentication found. Attempting to authenticate...[/orange]")
         if auth_manager.authenticate():
             console.print("[green]✅ Authentication successful![/green]")
         else:
@@ -226,16 +226,17 @@ def analyze(days):
             table = Table(title="60-Day Comprehensive Training Log", box=box.ROUNDED)
             table.add_column("Date", style="cyan", width=6)
             table.add_column("Activity", width=30)
-            table.add_column("Intensity", style="yellow", width=9)
+            table.add_column("Time", style="blue", width=6)
+            table.add_column("Intensity", style="black", width=9)
             table.add_column("Load", style="magenta", width=6)
             table.add_column("Fitness", style="blue", width=8)
-            table.add_column("Fatigue", style="bright_red", width=8)
+            table.add_column("Fatigue", style="red", width=8)
             table.add_column("Form", style="green", width=5)
             table.add_column("HRV", style="red", width=4)
-            table.add_column("Sleep", style="purple", width=5)
-            table.add_column("RHR", style="yellow", width=4)
+            table.add_column("Sleep", style="magenta", width=5)
+            table.add_column("RHR", style="black", width=4)
             table.add_column("Weight", style="blue", width=7)
-            table.add_column("BF%", style="bright_yellow", width=5)
+            table.add_column("BF%", style="green", width=5)
             table.add_column("H2O", style="cyan", width=5)
             table.add_column("BP", style="red", width=9)
 
@@ -248,8 +249,62 @@ def analyze(days):
 
                 db = get_db()
                 with db.get_session() as session:
+                    row_count = 0  # Track rows for header insertion
+
+                    # Weekly summary tracking
+                    weekly_tss = 0
+                    weekly_time_minutes = 0
+                    current_week_start = None
+
                     for h in history[-60:]:  # Show last 60 days
+                        # Add header after Sundays (on top of every Monday) for weekly organization
                         date_obj = dt.fromisoformat(h['date']).date()
+                        is_monday = date_obj.weekday() == 0  # Monday is 0 in Python
+
+                        if row_count > 0 and is_monday:
+                            # Add weekly summary for previous week
+                            if weekly_tss > 0 or weekly_time_minutes > 0:
+                                weekly_hours = weekly_time_minutes / 60
+                                table.add_row(
+                                    "[bold red]WEEK[/bold red]",
+                                    f"[bold red]Total: {weekly_tss:.0f} TSS, {weekly_hours:.1f}h[/bold red]",
+                                    "[bold white]—[/bold white]",
+                                    "[bold white]—[/bold white]",
+                                    "[bold white]—[/bold white]",
+                                    "[bold white]—[/bold white]",
+                                    "[bold white]—[/bold white]",
+                                    "[bold white]—[/bold white]",
+                                    "[bold white]—[/bold white]",
+                                    "[bold white]—[/bold white]",
+                                    "[bold white]—[/bold white]",
+                                    "[bold white]—[/bold white]",
+                                    "[bold white]—[/bold white]",
+                                    "[bold white]—[/bold white]",
+                                    "[bold white]—[/bold white]",
+                                )
+
+                            # Reset weekly counters
+                            weekly_tss = 0
+                            weekly_time_minutes = 0
+                            table.add_section()
+                            # Add a visual separator
+                            table.add_row(
+                                "[bold cyan]Date[/bold cyan]",
+                                "[bold black]Activity[/bold black]",
+                                "[bold blue]Time[/bold blue]",
+                                "[bold black]Intensity[/bold black]",
+                                "[bold magenta]Load[/bold magenta]",
+                                "[bold blue]Fitness[/bold blue]",
+                                "[bold red]Fatigue[/bold red]",
+                                "[bold green]Form[/bold green]",
+                                "[bold red]HRV[/bold red]",
+                                "[bold magenta]Sleep[/bold magenta]",
+                                "[bold black]RHR[/bold black]",
+                                "[bold blue]Weight[/bold blue]",
+                                "[bold green]BF%[/bold green]",
+                                "[bold cyan]H2O[/bold cyan]",
+                                "[bold red]BP[/bold red]",
+                            )
                         date_str = date_obj.strftime('%m/%d')
 
                         # Get all activities for that day ordered by start time
@@ -300,7 +355,7 @@ def analyze(days):
                                         elif ans_status == "Good":
                                             ans_display = f"[green]{ans_score:.0f}[/green]"
                                         elif ans_status in ["Mild Stress", "Stressed"]:
-                                            ans_display = f"[yellow]{ans_score:.0f}[/yellow]"
+                                            ans_display = f"[orange]{ans_score:.0f}[/orange]"
                                         elif ans_status in ["High Stress", "Severe Stress"]:
                                             ans_display = f"[red]{ans_score:.0f}[/red]"
                                         elif ans_status == "Overreaching":
@@ -341,8 +396,20 @@ def analyze(days):
                                 body_fat_str = f"{body_comp.body_fat_percent:.1f}%" if body_comp and body_comp.body_fat_percent else "—"
                                 water_str = f"{body_comp.water_percent:.1f}%" if body_comp and body_comp.water_percent else "—"
 
-                                # Calculate aggregated load from all activities
+                                # Calculate aggregated load and time from all activities
                                 total_load = sum(activity.training_load or 0 for activity in activities)
+                                total_time_seconds = sum(activity.moving_time or 0 for activity in activities)
+                                total_time_minutes = total_time_seconds / 60
+
+                                # Add to weekly totals
+                                weekly_tss += total_load
+                                weekly_time_minutes += total_time_minutes
+
+                                # Format time display
+                                if total_time_minutes >= 60:
+                                    time_display = f"{total_time_minutes/60:.1f}h"
+                                else:
+                                    time_display = f"{total_time_minutes:.0f}m"
 
                                 # Determine aggregated intensity based on total load
                                 agg_intensity = get_intensity_from_load(total_load)
@@ -351,6 +418,7 @@ def analyze(days):
                                 table.add_row(
                                     date_str,
                                     f"{len(activities)} Activities",  # Show number of activities
+                                    time_display,  # Total time
                                     agg_intensity,  # Aggregated intensity
                                     f"{total_load:.0f}",  # Aggregated load
                                     f"{h['fitness']:.1f}",
@@ -364,6 +432,7 @@ def analyze(days):
                                     water_str,
                                     bp_str,
                                 )
+                                row_count += 1
 
                                 # Then add each activity as separate rows
                                 for activity in activities:
@@ -382,14 +451,23 @@ def analyze(days):
                                     else:
                                         activity_display = activity_type
 
-                                    # Individual activity intensity based on training load
+                                    # Individual activity intensity and time
                                     activity_load = activity.training_load or 0
                                     intensity = get_intensity_from_load(activity_load)
+
+                                    # Format individual activity time
+                                    activity_time_seconds = activity.moving_time or 0
+                                    activity_time_minutes = activity_time_seconds / 60
+                                    if activity_time_minutes >= 60:
+                                        activity_time_display = f"{activity_time_minutes/60:.1f}h"
+                                    else:
+                                        activity_time_display = f"{activity_time_minutes:.0f}m"
 
                                     # Activity rows: empty date, no wellness data
                                     table.add_row(
                                         "",  # Empty date
                                         activity_display,
+                                        activity_time_display,  # Individual activity time
                                         intensity,
                                         f"{activity_load:.0f}",
                                         "—",  # No fitness data
@@ -403,6 +481,7 @@ def analyze(days):
                                         "—",  # No water data
                                         "—",  # No BP data
                                     )
+                                    row_count += 1
 
                             else:
                                 # Single activity: show normally
@@ -421,9 +500,22 @@ def analyze(days):
                                 else:
                                     activity_display = activity_type
 
-                                # Individual activity intensity based on training load
+                                # Individual activity intensity and time
                                 activity_load = activity.training_load or 0
                                 intensity = get_intensity_from_load(activity_load)
+
+                                # Calculate activity time and add to weekly totals
+                                activity_time_seconds = activity.moving_time or 0
+                                activity_time_minutes = activity_time_seconds / 60
+
+                                weekly_tss += activity_load
+                                weekly_time_minutes += activity_time_minutes
+
+                                # Format time display
+                                if activity_time_minutes >= 60:
+                                    activity_time_display = f"{activity_time_minutes/60:.1f}h"
+                                else:
+                                    activity_time_display = f"{activity_time_minutes:.0f}m"
 
                                 # Get wellness data for single activity
                                 # Enhanced HRV analysis using deep analyzer
@@ -451,7 +543,7 @@ def analyze(days):
                                         elif ans_status == "Good":
                                             ans_display = f"[green]{ans_score:.0f}[/green]"
                                         elif ans_status in ["Mild Stress", "Stressed"]:
-                                            ans_display = f"[yellow]{ans_score:.0f}[/yellow]"
+                                            ans_display = f"[orange]{ans_score:.0f}[/orange]"
                                         elif ans_status in ["High Stress", "Severe Stress"]:
                                             ans_display = f"[red]{ans_score:.0f}[/red]"
                                         elif ans_status == "Overreaching":
@@ -496,6 +588,7 @@ def analyze(days):
                                 table.add_row(
                                     date_str,
                                     activity_display,
+                                    activity_time_display,  # Activity time
                                     intensity,
                                     f"{activity_load:.0f}",
                                     f"{h['fitness']:.1f}",
@@ -509,6 +602,7 @@ def analyze(days):
                                     water_str,
                                     bp_str,
                                 )
+                                row_count += 1
                         else:
                             # Handle rest days - no activities
                             activity_display = "Rest Day" if h['load'] == 0 else "Active"
@@ -583,6 +677,7 @@ def analyze(days):
                             table.add_row(
                                 date_str,
                                 activity_display,
+                                "—",  # No activity time for rest days
                                 intensity,
                                 f"{h['load']:.0f}",
                                 f"{h['fitness']:.1f}",
@@ -596,6 +691,7 @@ def analyze(days):
                                 water_str,
                                 bp_str,
                             )
+                            row_count += 1
 
             except Exception as e:
                 # Fallback to basic version if wellness data unavailable
@@ -610,8 +706,33 @@ def analyze(days):
                 except:
                     wellness_available = False
 
+                row_count = 0  # Track rows for header insertion in fallback mode
                 for h in history[-60:]:  # Show last 60 days
-                    date_str = dt.fromisoformat(h['date']).strftime('%m/%d')
+                    # Add header after Sundays (on top of every Monday) for weekly organization
+                    date_obj = dt.fromisoformat(h['date']).date()
+                    is_monday = date_obj.weekday() == 0  # Monday is 0 in Python
+
+                    if row_count > 0 and is_monday:
+                        table.add_section()
+                        # Add a visual separator
+                        table.add_row(
+                            "[bold cyan]Date[/bold cyan]",
+                            "[bold black]Activity[/bold black]",
+                            "[bold blue]Time[/bold blue]",
+                            "[bold black]Intensity[/bold black]",
+                            "[bold magenta]Load[/bold magenta]",
+                            "[bold blue]Fitness[/bold blue]",
+                            "[bold red]Fatigue[/bold red]",
+                            "[bold green]Form[/bold green]",
+                            "[bold red]HRV[/bold red]",
+                            "[bold magenta]Sleep[/bold magenta]",
+                            "[bold black]RHR[/bold black]",
+                            "[bold blue]Weight[/bold blue]",
+                            "[bold green]BF%[/bold green]",
+                            "[bold cyan]H2O[/bold cyan]",
+                            "[bold red]BP[/bold red]",
+                        )
+                    date_str = date_obj.strftime('%m/%d')
 
                     # Enhanced intensity classification
                     if h['load'] == 0:
@@ -704,6 +825,7 @@ def analyze(days):
                     table.add_row(
                         date_str,
                         activity_display,
+                        "—",  # No time data in fallback mode
                         intensity,
                         f"{h['load']:.0f}",
                         f"{h['fitness']:.1f}",
@@ -716,6 +838,28 @@ def analyze(days):
                         body_fat_str,
                         water_str,
                         bp_str,
+                    )
+                    row_count += 1
+
+                # Add final weekly summary for the last week
+                if weekly_tss > 0 or weekly_time_minutes > 0:
+                    weekly_hours = weekly_time_minutes / 60
+                    table.add_row(
+                        "[bold red]WEEK[/bold red]",
+                        f"[bold red]Total: {weekly_tss:.0f} TSS, {weekly_hours:.1f}h[/bold red]",
+                        "[bold white]—[/bold white]",
+                        "[bold white]—[/bold white]",
+                        "[bold white]—[/bold white]",
+                        "[bold white]—[/bold white]",
+                        "[bold white]—[/bold white]",
+                        "[bold white]—[/bold white]",
+                        "[bold white]—[/bold white]",
+                        "[bold white]—[/bold white]",
+                        "[bold white]—[/bold white]",
+                        "[bold white]—[/bold white]",
+                        "[bold white]—[/bold white]",
+                        "[bold white]—[/bold white]",
+                        "[bold white]—[/bold white]",
                     )
 
             console.print("\n", table)
@@ -748,7 +892,7 @@ def analyze(days):
                         # Display health data anomalies
                         health_anomalies = insights.get('health_anomalies', {})
                         if health_anomalies.get('status') == 'analyzed' and health_anomalies.get('anomalies'):
-                            console.print("\n[bold yellow]📊 Health Data Anomalies Detected[/bold yellow]")
+                            console.print("\n[bold green]📊 Health Data Anomalies Detected[/bold green]")
                             anomalies_table = Table(title="Health Metric Outliers", box=box.ROUNDED)
                             anomalies_table.add_column("Date", style="cyan")
                             anomalies_table.add_column("Metric", style="blue")
@@ -781,10 +925,10 @@ def analyze(days):
                             for i, rec in enumerate(insights['critical_recommendations'][:5], 1):
                                 console.print(f"   {i}. {rec}")
 
-                        console.print(f"\n[dim]🔍 Advanced analysis complete - {len(insights)} analysis modules processed[/dim]")
+                        console.print(f"\n[black]🔍 Advanced analysis complete - {len(insights)} analysis modules processed[/black]")
 
             except ImportError:
-                console.print("\n[yellow]⚠️ Advanced insights analysis not available - missing dependencies[/yellow]")
+                console.print("\n[orange]⚠️ Advanced insights analysis not available - missing dependencies[/orange]")
             except Exception as insights_error:
                 console.print(f"\n[red]❌ Advanced insights analysis failed: {insights_error}[/red]")
 
@@ -827,10 +971,10 @@ def recommend():
             "MODERATE": "cyan",
             "HARD": "magenta",
             "PEAK": "bold magenta",
-            "NO_DATA": "dim",
+            "NO_DATA": "black",
         }
 
-        rec_color = color_map.get(recommendation["recommendation"], "white")
+        rec_color = color_map.get(recommendation["recommendation"], "black")
 
         # Create recommendation panel using new format
         rec_text = f"""
@@ -863,7 +1007,7 @@ def recommend():
                 table = Table(title=title, box=box.ROUNDED)
                 table.add_column("Day", style="cyan", width=3)
                 table.add_column("Date", width=10)
-                table.add_column("Week Type", style="bright_blue", width=10)
+                table.add_column("Week Type", style="blue", width=10)
                 table.add_column("Intensity", style="yellow", width=15)
                 table.add_column("Activity", style="blue", width=24)
                 table.add_column("2nd Session", style="green", width=27)
@@ -897,10 +1041,10 @@ def recommend():
 
                         week_type = week_types.get(week_num, "MAINTENANCE")
                         week_type_color = {
-                            "BUILD 1": "bright_green", "BUILD 2": "green", "BUILD 3": "yellow",
-                            "RECOVERY": "bright_cyan", "PEAK 1": "bright_red", "PEAK 2": "red",
-                            "TAPER 1": "magenta", "TAPER 2": "bright_magenta", "MAINTENANCE": "white"
-                        }.get(week_type, "white")
+                            "BUILD 1": "green", "BUILD 2": "green", "BUILD 3": "orange",
+                            "RECOVERY": "cyan", "PEAK 1": "red", "PEAK 2": "red",
+                            "TAPER 1": "magenta", "TAPER 2": "magenta", "MAINTENANCE": "green"
+                        }.get(week_type, "black")
 
                         # Calculate weekly time totals for this week
                         week_plans = [p for p in training_plan if (p['day'] - 1) // 7 == week_num]
@@ -955,14 +1099,14 @@ def recommend():
 
                         table.add_row(
                             f"[bold]W{week_num+1}[/bold]",
-                            "[white]────────[/white]",
+                            "[black]────────[/black]",
                             f"[{week_type_color}]{week_type}[/{week_type_color}]",
-                            "[white]────────[/white]",
+                            "[black]────────[/black]",
                             f"[cyan]{time_summary}[/cyan]",
-                            "[white]─────────────────────────[/white]",
-                            "[white]────[/white]",
-                            "[white]──────[/white]",
-                            "[white]───────[/white]"
+                            "[black]─────────────────────────[/black]",
+                            "[black]────[/black]",
+                            "[black]──────[/black]",
+                            "[black]───────[/black]"
                         )
 
                     # Color code recommendations
@@ -974,7 +1118,7 @@ def recommend():
                         "HARD": "magenta",
                         "PEAK": "bold magenta"
                     }
-                    rec_color = rec_colors.get(plan['recommendation'], "white")
+                    rec_color = rec_colors.get(plan['recommendation'], "black")
 
                     # Get week type for this day
                     week_types = {
@@ -993,10 +1137,10 @@ def recommend():
 
                     week_type = week_types.get(week_num, "MAINTENANCE")
                     week_type_color = {
-                        "BUILD 1": "bright_green", "BUILD 2": "green", "BUILD 3": "yellow",
+                        "BUILD 1": "bright_green", "BUILD 2": "green", "BUILD 3": "black",
                         "RECOVERY": "bright_cyan", "PEAK 1": "bright_red", "PEAK 2": "red",
-                        "TAPER 1": "magenta", "TAPER 2": "bright_magenta", "MAINTENANCE": "white"
-                    }.get(week_type, "white")
+                        "TAPER 1": "magenta", "TAPER 2": "bright_magenta", "MAINTENANCE": "black"
+                    }.get(week_type, "black")
 
                     # Get activity name
                     activity = plan.get('activity', 'Unknown')
@@ -1374,7 +1518,7 @@ def test():
         console.print("  GARMIN_EMAIL=your_email@example.com")
         console.print("  GARMIN_PASSWORD=your_password")
     except Exception as e:
-        console.print(f"[red]❌ Unexpected error: {e}[/red]")
+        console.print(f"[red]❌ Unexpected error: {str(e).replace('[', r'\[').replace(']', r'\]')}[/red]")
 
 
 @garmin.command()
@@ -1469,7 +1613,7 @@ def test_mfa(code):
         else:
             console.print(f"[red]❌ Garmin MFA error: {e}[/red]")
     except Exception as e:
-        console.print(f"[red]❌ Unexpected error: {e}[/red]")
+        console.print(f"[red]❌ Unexpected error: {str(e).replace('[', r'\[').replace(']', r'\]')}[/red]")
 
 
 @garmin.command()
@@ -1557,7 +1701,7 @@ def login(code):
             console.print("  GARMIN_EMAIL=your_email@example.com")
             console.print("  GARMIN_PASSWORD=your_password")
     except Exception as e:
-        console.print(f"[red]❌ Unexpected error: {e}[/red]")
+        console.print(f"[red]❌ Unexpected error: {str(e).replace('[', r'\[').replace(']', r'\]')}[/red]")
 
 
 @garmin.command()
@@ -1775,7 +1919,7 @@ def trends(days, user_id):
         # Athletic Performance Analysis
         table = Table(title="Athletic Performance Changes", box=box.ROUNDED)
         table.add_column("Metric", style="cyan")
-        table.add_column("Change", style="white")
+        table.add_column("Change", style="black")
         table.add_column("Athletic Impact", style="green")
 
         if analysis.get("weight_change_kg") is not None:
@@ -1798,7 +1942,7 @@ def trends(days, user_id):
         # Recovery & Stability Indicators
         stability_table = Table(title="Recovery & Performance Stability", box=box.ROUNDED)
         stability_table.add_column("Indicator", style="cyan")
-        stability_table.add_column("Score", style="white")
+        stability_table.add_column("Score", style="black")
         stability_table.add_column("Training Impact", style="green")
 
         if analysis.get("water_stability_score") is not None:
@@ -1977,7 +2121,7 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
                 else:
                     sync_results.append("🩺 [yellow]Omron BP Data: ℹ️ No new data[/yellow]")
             else:
-                sync_results.append("🩺 [dim]Omron BP Data: No CSV files found[/dim]")
+                sync_results.append("🩺 [white]Omron BP Data: No CSV files found[/white]")
         except Exception as e:
             sync_results.append(f"🩺 [yellow]Omron BP Data: ⚠️ Import failed[/yellow]")
 
@@ -2357,9 +2501,9 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
 
                     week_type = week_types.get(week_num, "MAINTENANCE")
                     week_type_color = {
-                        "BUILD 1": "bright_green", "BUILD 2": "green", "BUILD 3": "yellow",
-                        "RECOVERY": "bright_cyan", "PEAK 1": "bright_red", "PEAK 2": "red",
-                        "TAPER 1": "magenta", "TAPER 2": "bright_magenta", "MAINTENANCE": "black"
+                        "BUILD 1": "green", "BUILD 2": "green", "BUILD 3": "orange",
+                        "RECOVERY": "cyan", "PEAK 1": "red", "PEAK 2": "red",
+                        "TAPER 1": "magenta", "TAPER 2": "magenta", "MAINTENANCE": "black"
                     }.get(week_type, "black")
 
                     # Calculate weekly time totals for this week
@@ -2455,9 +2599,9 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
 
                     week_type = week_types.get(week_num, "MAINTENANCE")
                     week_type_color = {
-                        "BUILD 1": "bright_green", "BUILD 2": "green", "BUILD 3": "yellow",
-                        "RECOVERY": "bright_cyan", "PEAK 1": "bright_red", "PEAK 2": "red",
-                        "TAPER 1": "magenta", "TAPER 2": "bright_magenta", "MAINTENANCE": "black"
+                        "BUILD 1": "green", "BUILD 2": "green", "BUILD 3": "orange",
+                        "RECOVERY": "cyan", "PEAK 1": "red", "PEAK 2": "red",
+                        "TAPER 1": "magenta", "TAPER 2": "magenta", "MAINTENANCE": "black"
                     }.get(week_type, "black")
 
                     # Get activity name
@@ -2551,8 +2695,141 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
             console.print(f"  • {error}")
         console.print(f"\n[cyan]You can run individual commands to fix specific issues[/cyan]")
     else:
-
         console.print(f"\n[cyan]🧬 Models active • 📊 Multi-system analysis • 🎯 Optimal recommendations ready[/cyan]")
+
+    # Step 7: Phase 2 Strategic Enhancements
+    console.print("")  # Spacing
+    step7_header = Panel("🚀 Step 7: Phase 2 Strategic Enhancements", box=box.HEAVY, style="bold blue")
+    console.print(step7_header)
+
+    try:
+        # 7.1: Strength Training Integration
+        console.print(f"\n[cyan]Strength Training Integration:[/cyan]")
+
+        from .analysis.strength_planner import StrengthPlanner
+        planner = StrengthPlanner()
+
+        # Get current training phase from the analyzer
+        try:
+            analyzer = get_integrated_analyzer("user")
+            analysis = analyzer.analyze_with_advanced_models(days_back=30)
+
+            if analysis and 'combined' in analysis and len(analysis['combined']) > 0:
+                latest = analysis['combined'].iloc[-1]
+                current_form = latest['ff_form']
+                current_fitness = latest['ff_fitness']
+
+                # Determine endurance phase based on form/fitness
+                if current_form < -15:
+                    endurance_phase = "BUILD"
+                elif current_form > 0:
+                    endurance_phase = "PEAK"
+                else:
+                    endurance_phase = "BASE"
+            else:
+                endurance_phase = "BASE"  # Default
+        except:
+            endurance_phase = "BASE"  # Fallback
+
+        # Generate today's strength workout
+        from datetime import datetime, timedelta
+        today = datetime.now()
+        day_of_week = today.weekday()  # 0=Monday
+        week_number = today.isocalendar()[1] % 4  # 4-week cycle
+
+        strength_phase = planner.align_with_endurance_phase(endurance_phase, week_number)
+        today_workout = planner.generate_workout(strength_phase, week_number, day_of_week)
+
+        if today_workout:
+            console.print(f"[green]✅ Today's Strength Session:[/green] {strength_phase.value.replace('_', ' ').title()}")
+            console.print(f"   • Duration: {today_workout.duration_min} minutes")
+            console.print(f"   • Estimated TSS: {today_workout.volume_tss:.0f}")
+            console.print(f"   • Exercises: {len(today_workout.exercises)} exercises")
+            console.print(f"   • Phase Notes: {today_workout.notes}")
+        else:
+            console.print(f"[yellow]💤 No strength training scheduled for today ({['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][day_of_week]})[/yellow]")
+
+        console.print(f"[white]   Use 'strava-super strength-workout --phase {endurance_phase} --week {week_number}' for detailed workout[/white]")
+
+        # 7.2: ML Performance Prediction
+        console.print(f"\n[cyan]ML Performance Prediction:[/cyan]")
+
+        from .analysis.performance_predictor import PerformancePredictor
+
+        try:
+            with analyzer.db.get_session() as session:
+                predictor = PerformancePredictor(db_session=session)
+
+                # Check if model exists and load it
+                import os
+                model_path = "models/performance_model.joblib"
+
+                if os.path.exists(model_path):
+                    try:
+                        predictor.load_model(model_path)
+                        model_loaded = True
+                    except Exception:
+                        model_loaded = False
+                else:
+                    # Try to train the model if we have enough data
+                    try:
+                        metadata = predictor.train_model()
+                        if metadata and 'races_found' in metadata and metadata['races_found'] >= 3:
+                            os.makedirs("models", exist_ok=True)
+                            predictor.save_model(model_path)
+                            model_loaded = True
+                        else:
+                            model_loaded = False
+                    except Exception:
+                        model_loaded = False
+
+                if model_loaded:
+                    # Try to make predictions for all race distances
+                    race_distances = [5.0, 10.0, 21.1, 42.195, 50.0, 75.0, 100.0]  # 5K, 10K, Half, Marathon, Ultra distances
+                    race_names = {
+                        5.0: "5K",
+                        10.0: "10K",
+                        21.1: "HM (21.1km)",
+                        42.195: "M (42.195km)",
+                        50.0: "Ultra 50km",
+                        75.0: "Ultra 75km",
+                        100.0: "Ultra 100km"
+                    }
+
+                    predictions_made = False
+                    console.print("[cyan]Running Predictions (4 weeks):[/cyan]")
+
+                    for distance in race_distances:
+                        try:
+                            # Predict for 4 weeks from now (typical training cycle)
+                            future_date = datetime.now() + timedelta(days=28)
+                            prediction = predictor.predict_race_performance(future_date, distance)
+
+                            if prediction and 'predicted_time_formatted' in prediction:
+                                race_name = race_names[distance]
+                                console.print(f"[green]🎯 {race_name} Prediction:[/green] {prediction['predicted_time_formatted']}")
+                                predictions_made = True
+                        except:
+                            continue
+
+                    if not predictions_made:
+                        console.print(f"[yellow]⚠️ Unable to generate predictions with current model[/yellow]")
+                else:
+                    console.print(f"[yellow]⚠️ ML model needs more training data for predictions[/yellow]")
+
+        except Exception as e:
+            console.print(f"[yellow]⚠️ ML prediction not available: {str(e)[:50]}...[/yellow]")
+
+        # 7.3: Taper Optimization Preview
+        console.print(f"\n[cyan]Taper Optimization:[/cyan]")
+        console.print(f"[white]📈 Advanced taper strategies available for peak performance[/white]")
+        console.print(f"[white]   Use 'strava-super optimize-taper --race-date YYYY-MM-DD --distance KM' for optimization[/white]")
+    except Exception as e:
+        console.print(f"[red]❌ Phase 2 integration failed: {e}[/red]")
+
+    # Final Summary
+    if not errors:
+        console.print(f"\n[green]🎉 Complete workflow finished successfully with Phase 2 enhancements![/green]")
 
 
 @cli.command()
@@ -2633,7 +2910,7 @@ def show_training_plan(duration):
                 table = Table(title=title, box=box.ROUNDED)
                 table.add_column("Day", style="cyan", width=3)
                 table.add_column("Date", width=10)
-                table.add_column("Week Type", style="bright_blue", width=10)
+                table.add_column("Week Type", style="blue", width=10)
                 table.add_column("Intensity", style="yellow", width=11)
                 table.add_column("Primary Activity & Duration", style="blue", width=32)
                 table.add_column("2nd Activity & Duration", style="green", width=28)
@@ -2657,11 +2934,11 @@ def show_training_plan(duration):
                             table.add_row(
                                 "[white]─[/white]",
                                 "[white]──────────[/white]",
-                                "[white]───────[/white]",
+                                "[black]───────[/black]",
                                 "[white]───────────[/white]",
-                                "[white]─────────────────────────[/white]",
+                                "[black]─────────────────────────[/black]",
                                 "[white]──────────────────────────[/white]",
-                                "[white]────[/white]",
+                                "[black]────[/black]",
                                 "[white]──[/white]",
                                 "[white]────[/white]"
                             )
@@ -2747,15 +3024,15 @@ def show_training_plan(duration):
                         week_summary = f"{time_status} {hours_info} | {budget_info} {utilization}"
 
                         table.add_row(
-                            f"[bold bright_white]W{week_num+1}[/bold bright_white]",
-                            "[dim white]────────[/dim white]",
+                            f"[bold black]W{week_num+1}[/bold black]",
+                            "[black]────────[/black]",
                             f"[bold {week_type_color}]{week_type}[/bold {week_type_color}]",
-                            "[dim white]─────────[/dim white]",
-                            f"[bold cyan]{week_summary}[/bold cyan]",
-                            "[dim white]─────────────────────────[/dim white]",
-                            "[dim white]────[/dim white]",
-                            "[dim white]──────[/dim white]",
-                            "[dim white]───────[/dim white]"
+                            "[white]─────────[/white]",
+                            f"[bold orange]{week_summary}[/bold orange]",
+                            "[black]─────────────────────────[/black]",
+                            "[black]────[/black]",
+                            "[black]──────[/black]",
+                            "[black]───────[/black]"
                         )
 
                     # Color code recommendations
@@ -2785,9 +3062,9 @@ def show_training_plan(duration):
 
                     week_type = week_types.get(week_num, "MAINTENANCE")
                     week_type_color = {
-                        "BUILD 1": "bright_green", "BUILD 2": "green", "BUILD 3": "yellow",
-                        "RECOVERY": "bright_cyan", "PEAK 1": "bright_red", "PEAK 2": "red",
-                        "TAPER 1": "magenta", "TAPER 2": "bright_magenta", "MAINTENANCE": "black"
+                        "BUILD 1": "green", "BUILD 2": "green", "BUILD 3": "orange",
+                        "RECOVERY": "cyan", "PEAK 1": "red", "PEAK 2": "red",
+                        "TAPER 1": "magenta", "TAPER 2": "magenta", "MAINTENANCE": "black"
                     }.get(week_type, "black")
 
                     # Get activity name
@@ -3283,15 +3560,346 @@ def clean_metrics(confirm):
         console.print(f"[red]❌ Error cleaning metrics: {e}[/red]")
 
 
+@cli.command()
+@click.option('--race-date', required=True, help='Race date (YYYY-MM-DD)')
+@click.option('--distance', required=True, type=float, help='Race distance in km')
+@click.option('--retrain', is_flag=True, help='Retrain model before prediction')
+def predict_race(race_date: str, distance: float, retrain: bool):
+    """Predict race performance using ML model."""
+    from .analysis.performance_predictor import PerformancePredictor
+    from .db import get_db
+    import os
+
+    console.print("[cyan]🏃 Race Performance Prediction[/cyan]")
+    console.print(f"Race Date: {race_date}")
+    console.print(f"Distance: {distance}km")
+
+    try:
+        # Get database session
+        db = get_db()
+
+        with db.get_session() as session:
+            predictor = PerformancePredictor(db_session=session)
+
+            model_path = 'models/performance_model.joblib'
+
+            # Train or load model
+            if retrain or not os.path.exists(model_path):
+                console.print("[yellow]Training performance prediction model...[/yellow]")
+                with console.status("[yellow]Training model...[/yellow]"):
+                    metadata = predictor.train_model()
+                    predictor.save_model(model_path)
+                console.print(f"[green]✅ Model trained with MAE: {metadata['mae']:.2f} km/h[/green]")
+            else:
+                predictor.load_model(model_path)
+                console.print("[green]✅ Model loaded from cache[/green]")
+
+            # Parse race date
+            race_datetime = datetime.strptime(race_date, '%Y-%m-%d')
+
+            # Make prediction
+            with console.status("[yellow]Calculating prediction...[/yellow]"):
+                prediction = predictor.predict_race_performance(race_datetime, distance)
+
+            # Display results
+            table = Table(title=f"🏁 Race Prediction - {distance}km", box=box.ROUNDED)
+            table.add_column("Metric", style="cyan")
+            table.add_column("Value", style="yellow")
+
+            table.add_row("Predicted Time", prediction['predicted_time_formatted'])
+            table.add_row("Predicted Pace", f"{prediction['predicted_pace_per_km']}/km")
+            table.add_row("Predicted Speed", f"{prediction['predicted_speed_kmh']:.2f} km/h")
+            table.add_row("Model Confidence", f"{prediction['confidence']:.1%}")
+            table.add_row("Model MAE", f"±{prediction['model_mae']:.2f} km/h")
+
+            console.print(table)
+
+            # Show feature importance if available
+            if prediction.get('feature_importance'):
+                importance_table = Table(title="🔍 Key Performance Factors", box=box.SIMPLE)
+                importance_table.add_column("Feature", style="cyan")
+                importance_table.add_column("Importance", style="yellow")
+
+                for feat, imp in prediction['feature_importance'].items():
+                    # Format feature name
+                    feat_display = feat.replace('_', ' ').title()
+                    importance_table.add_row(feat_display, f"{imp:.3f}")
+
+                console.print(importance_table)
+
+    except Exception as e:
+        console.print(f"[red]❌ Prediction failed: {e}[/red]")
+
+
+@cli.command()
+@click.option('--race-date', required=True, help='Race date (YYYY-MM-DD)')
+@click.option('--distance', required=True, type=float, help='Race distance in km')
+def optimize_taper(race_date: str, distance: float):
+    """Optimize taper strategy for race performance."""
+    from .analysis.performance_predictor import PerformancePredictor
+    from .db import get_db
+    import os
+
+    console.print("[cyan]📈 Taper Strategy Optimization[/cyan]")
+    console.print(f"Race Date: {race_date}")
+    console.print(f"Distance: {distance}km")
+
+    try:
+        # Get database session
+        db = get_db()
+
+        with db.get_session() as session:
+            # Get current CTL from database
+            from .db.models import Metric
+            latest_metrics = session.query(Metric).order_by(
+                Metric.date.desc()
+            ).first()
+
+            current_ctl = latest_metrics.fitness if latest_metrics else 80
+
+            predictor = PerformancePredictor(db_session=session)
+
+            model_path = 'models/performance_model.joblib'
+            if not os.path.exists(model_path):
+                console.print("[yellow]Training model first...[/yellow]")
+                metadata = predictor.train_model()
+                predictor.save_model(model_path)
+            else:
+                predictor.load_model(model_path)
+
+            # Parse race date
+            race_datetime = datetime.strptime(race_date, '%Y-%m-%d')
+
+            # Optimize taper
+            with console.status("[yellow]Comparing taper strategies...[/yellow]"):
+                optimization = predictor.optimize_taper(race_datetime, distance, current_ctl)
+
+            # Display results
+            table = Table(title="🏆 Taper Strategy Comparison", box=box.ROUNDED)
+            table.add_column("Strategy", style="cyan")
+            table.add_column("TSB Target", style="yellow")
+            table.add_column("Duration", style="yellow")
+            table.add_column("Load Reduction", style="yellow")
+            table.add_column("Predicted Speed", style="green")
+
+            for name, details in optimization['all_strategies'].items():
+                is_best = name == optimization['recommended_strategy']
+                style = "bold green" if is_best else ""
+                marker = "✅ " if is_best else ""
+
+                table.add_row(
+                    f"{marker}{name.title()}",
+                    f"{details['tsb_target']}",
+                    f"{details['duration_days']} days",
+                    f"{details['load_reduction']:.0%}",
+                    f"{details['predicted_speed_kmh']:.2f} km/h",
+                    style=style
+                )
+
+            console.print(table)
+
+            # Summary
+            console.print("\n[green]📊 Optimization Summary:[/green]")
+            console.print(f"Recommended Strategy: [bold cyan]{optimization['recommended_strategy'].title()}[/bold cyan]")
+            console.print(f"Optimal TSB: [yellow]{optimization['optimal_tsb']}[/yellow]")
+            console.print(f"Taper Duration: [yellow]{optimization['optimal_duration']} days[/yellow]")
+            console.print(f"Speed Improvement: [green]+{optimization['improvement_over_worst']:.2f} km/h[/green]")
+
+    except Exception as e:
+        console.print(f"[red]❌ Optimization failed: {e}[/red]")
+
+
+@cli.command()
+@click.option('--phase', type=click.Choice(['BASE', 'BUILD', 'PEAK', 'TAPER']),
+              help='Endurance training phase', default='BUILD')
+@click.option('--week', type=int, default=1, help='Week number in phase')
+@click.option('--program', is_flag=True, help='Generate full multi-week streprogen program')
+@click.option('--duration', type=int, help='Program duration in weeks (for --program)', default=4)
+@click.option('--athlete-level', type=click.Choice(['beginner', 'intermediate', 'advanced']),
+              help='Athlete level', default='intermediate')
+@click.option('--export', help='Export program to file (specify path with .txt/.html/.tex extension)')
+@click.option('--analyze', is_flag=True, help='Show detailed program analysis')
+@click.option('--rpe-target', type=float, help='Target RPE for autoregulated program (6.0-10.0)', default=8.0)
+@click.option('--deload', is_flag=True, help='Generate deload week program')
+def strength_workout(phase: str, week: int, program: bool, duration: int, athlete_level: str,
+                    export: str, analyze: bool, rpe_target: float, deload: bool):
+    """Generate strength training workout or full periodized program using streprogen."""
+    from .analysis.strength_planner import StrengthPlanner
+    from datetime import date
+
+    console.print("[cyan]💪 Advanced Strength Training System[/cyan]")
+
+    try:
+        planner = StrengthPlanner()
+
+        # Get current maxes from .env configuration
+        current_maxes = planner.get_current_maxes()
+        console.print(f"[cyan]Using your configured lifts:[/cyan] Bench: {current_maxes['bench']}kg, Squat: {current_maxes['squat']}kg, Deadlift: {current_maxes['deadlift']}kg, Press: {current_maxes['press']}kg")
+        console.print(f"[black]💡 Update these in your .env file: STRENGTH_BENCH_PRESS_1RM, etc.[/black]")
+
+        # Handle deload week generation
+        if deload:
+            console.print("[orange]🔄 Generating Deload Week Program[/orange]")
+
+            strength_phase = planner.align_with_endurance_phase(phase, week)
+            deload_program = planner.generate_deload_week_program(strength_phase, current_maxes)
+
+            if deload_program:
+                console.print(planner.get_program_summary(deload_program))
+
+                if export:
+                    format_type = export.split('.')[-1] if '.' in export else 'txt'
+                    success = planner.export_program_to_file(deload_program, export, format_type)
+                    if success:
+                        console.print(f"[green]✅ Deload program exported to {export}[/green]")
+            else:
+                console.print("[red]❌ Failed to generate deload program[/red]")
+            return
+
+        # Handle full program generation
+        if program:
+            # Use athlete level from .env, with CLI override
+            effective_athlete_level = athlete_level if athlete_level != "intermediate" else planner.athlete_level
+            console.print(f"[orange]📋 Generating {duration}-Week Periodized Program[/orange]")
+            console.print(f"Phase: {phase} | Level: {effective_athlete_level}")
+
+            strength_phase = planner.align_with_endurance_phase(phase, week)
+
+            # Generate full streprogen program with advanced features
+            if rpe_target != 8.0:  # Custom RPE target
+                console.print(f"[cyan]🎯 Using RPE-based autoregulation (target: {rpe_target})[/cyan]")
+                full_program = planner.create_autoregulated_program(
+                    phase=strength_phase,
+                    duration_weeks=duration,
+                    rpe_target=rpe_target,
+                    current_maxes=current_maxes
+                )
+            else:
+                full_program = planner.generate_streprogen_program(
+                    phase=strength_phase,
+                    duration_weeks=duration,
+                    athlete_level=effective_athlete_level,
+                    current_maxes=current_maxes
+                )
+
+            if full_program:
+                # Show program summary
+                console.print(planner.get_program_summary(full_program))
+
+                # Show detailed analysis if requested
+                if analyze:
+                    console.print("\n[cyan]📊 Program Analysis:[/cyan]")
+                    metrics = planner.analyze_program_metrics(full_program)
+
+                    analysis_table = Table(title="Program Metrics", box=box.ROUNDED)
+                    analysis_table.add_column("Metric", style="cyan")
+                    analysis_table.add_column("Value", style="yellow")
+
+                    analysis_table.add_row("Duration", f"{metrics.get('duration_weeks', 0)} weeks")
+                    analysis_table.add_row("Training Frequency", f"{metrics.get('training_frequency', 0)} days/week")
+                    analysis_table.add_row("Total Exercises", str(metrics.get('total_exercises', 0)))
+                    analysis_table.add_row("Avg Exercises/Day", f"{metrics.get('avg_exercises_per_day', 0):.1f}")
+                    analysis_table.add_row("Volume Classification", metrics.get('volume_classification', 'Unknown'))
+                    analysis_table.add_row("Intensity Classification", metrics.get('intensity_classification', 'Unknown'))
+
+                    console.print(analysis_table)
+
+                # Export if requested
+                if export:
+                    format_type = export.split('.')[-1] if '.' in export else 'txt'
+                    success = planner.export_program_to_file(full_program, export, format_type)
+                    if success:
+                        console.print(f"[green]✅ Program exported to {export}[/green]")
+                        console.print("[black]💡 Open the file to see the complete week-by-week progression![/black]")
+                    else:
+                        console.print(f"[red]❌ Failed to export program to {export}[/red]")
+            else:
+                console.print("[red]❌ Failed to generate streprogen program[/red]")
+            return
+
+        # Handle single workout generation (original functionality)
+        console.print(f"[orange]🏋️ Generating Today's Workout[/orange]")
+
+        # Get today's day of week (0=Monday)
+        today = date.today()
+        day_of_week = today.weekday()
+
+        # Generate workout
+        phase = phase or "BUILD"  # Default to build phase
+        workout = planner.generate_workout(
+            strength_phase=planner.align_with_endurance_phase(phase, week),
+            week_number=week,
+            day_of_week=day_of_week
+        )
+
+        if workout is None:
+            console.print(f"[orange]No strength training scheduled for {today.strftime('%A')}[/orange]")
+            console.print("[cyan]Strength training days vary by phase:[/cyan]")
+            console.print("• Base Phase: Tuesday, Friday")
+            console.print("• Build Phase: Tuesday, Saturday")
+            console.print("• Peak/Taper: Wednesday only")
+            console.print("\n[black]💡 Advanced streprogen features available:[/black]")
+            console.print("[black]   --program                 Generate full multi-week program[/black]")
+            console.print("[black]   --deload                  Generate deload week[/black]")
+            console.print("[black]   --rpe-target 8.5          RPE-based autoregulation[/black]")
+            console.print("[black]   --export program.html     Export to HTML/TXT/TEX[/black]")
+            return
+
+        # Display single workout
+        table = Table(title=f"💪 {workout.phase.value.replace('_', ' ').title()} - Week {week}", box=box.ROUNDED)
+        table.add_column("Exercise", style="cyan")
+        table.add_column("Sets", style="orange")
+        table.add_column("Reps", style="orange")
+        table.add_column("Intensity", style="green")
+        table.add_column("Rest", style="magenta")
+        table.add_column("Notes", style="black")
+
+        for ex in workout.exercises:
+            table.add_row(
+                ex.name,
+                str(ex.sets),
+                str(ex.reps),
+                f"{ex.intensity_percent:.0f}%",
+                f"{ex.rest_seconds}s",
+                ex.notes
+            )
+
+        console.print(table)
+
+        # Workout summary
+        summary_table = Table(title="📊 Workout Summary", box=box.SIMPLE)
+        summary_table.add_column("Metric", style="cyan")
+        summary_table.add_column("Value", style="yellow")
+
+        summary_table.add_row("Duration", f"{workout.duration_min} minutes")
+        summary_table.add_row("Training Load", f"{workout.volume_tss:.0f} TSS")
+        summary_table.add_row("Warmup", workout.warmup_protocol)
+        summary_table.add_row("Cooldown", workout.cooldown_protocol)
+
+        console.print(summary_table)
+
+        # Notes
+        if workout.notes:
+            console.print(f"\n[cyan]📝 Notes:[/cyan] {workout.notes}")
+
+        # Show available advanced features
+        console.print("\n[black]💡 Advanced streprogen features available:[/black]")
+        console.print("[black]   strava-super strength-workout --program --duration 8[/black]")
+        console.print("[black]   strava-super strength-workout --deload --export deload.html[/black]")
+
+    except Exception as e:
+        console.print(f"[red]❌ Failed to generate workout: {e}[/red]")
+
+
 def main():
     """Main entry point."""
     try:
         config.ensure_dirs()
         cli()
     except KeyboardInterrupt:
-        console.print("\n[yellow]Operation cancelled by user.[/yellow]")
+        console.print("\n[orange]Operation cancelled by user.[/orange]")
     except Exception as e:
-        console.print(f"[red]❌ Unexpected error: {e}[/red]")
+        console.print(f"[red]❌ Unexpected error: {str(e).replace('[', r'\[').replace(']', r'\]')}[/red]")
 
 
 if __name__ == "__main__":

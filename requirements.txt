@@ -26,10 +26,15 @@ streprogen>=3.0.0
 
 # Phase 2: ML-based Performance Prediction
 scikit-learn>=1.3.0
+scipy>=1.11.0
 xgboost>=2.0.0
 optuna>=3.4.0
 shap>=0.43.0
 joblib>=1.3.0
+
+# Phase 2 Enhanced: Deep Learning for Time-Series
+tensorflow>=2.15.0  # LSTM for trajectory prediction
+keras>=3.0.0  # High-level API for neural networks
 
 # Optional: API server
 fastapi>=0.104.0

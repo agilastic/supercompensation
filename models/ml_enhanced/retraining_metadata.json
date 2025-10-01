@@ -1,0 +1,28 @@
+{
+  "lstm_trajectory": {
+    "last_trained": "2025-10-01T09:17:47.555619",
+    "metrics": {
+      "status": "success",
+      "final_loss": 0.04539491608738899,
+      "final_val_loss": 0.04381083697080612,
+      "final_mae": 0.16862432658672333,
+      "epochs_trained": 28,
+      "samples_trained": 61
+    }
+  },
+  "anomaly_detector": {
+    "last_trained": "2025-10-01T09:33:36.402720",
+    "metrics": {
+      "status": "success",
+      "n_samples": 91,
+      "n_features": 5,
+      "features": [
+        "ctl",
+        "atl",
+        "tsb",
+        "daily_load",
+        "ramp_rate"
+      ]
+    }
+  }
+}

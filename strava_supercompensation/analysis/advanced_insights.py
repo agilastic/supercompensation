@@ -496,9 +496,28 @@ class AdvancedInsightsAnalyzer:
                 total_load += load
 
             # Analyze strength training deficit
-            strength_sports = ['WeightTraining', 'Workout', 'Weights']
-            strength_time = sum(sport_time.get(sport, 0) for sport in strength_sports)
+            # Case-insensitive matching for strength activities
+            strength_keywords = ['weight', 'workout', 'strength']
+            strength_time = sum(
+                time for sport, time in sport_time.items()
+                if any(keyword in sport.lower() for keyword in strength_keywords)
+            )
             strength_percentage = (strength_time / total_time * 100) if total_time > 0 else 0
+
+            # Also calculate recent 30-day trend for comparison
+            recent_30d_end = end_date
+            recent_30d_start = end_date - timedelta(days=30)
+            recent_activities = [a for a in activities if recent_30d_start <= a.start_date.date() <= recent_30d_end]
+
+            if recent_activities:
+                recent_total_time = sum((a.moving_time or 0) / 3600 for a in recent_activities)
+                recent_strength_time = sum(
+                    (a.moving_time or 0) / 3600 for a in recent_activities
+                    if any(keyword in a.type.lower() for keyword in strength_keywords)
+                )
+                recent_strength_percentage = (recent_strength_time / recent_total_time * 100) if recent_total_time > 0 else 0
+            else:
+                recent_strength_percentage = strength_percentage
 
             if strength_percentage < 15:  # Should be 15-20% for endurance athletes
                 imbalances.append(TrainingImbalance(
@@ -547,6 +566,7 @@ class AdvancedInsightsAnalyzer:
                 }
                 for imb in imbalances
             ],
+            'recent_strength_pct': recent_strength_percentage,  # Add 30-day trend
             'sport_distribution': {
                 sport: {
                     'time_hours': sport_time.get(sport, 0),
@@ -774,7 +794,12 @@ class AdvancedInsightsAnalyzer:
         imbalances = results.get('training_imbalances', {}).get('imbalances', [])
         strength_deficit = next((imb for imb in imbalances if imb['type'] == 'strength_deficit'), None)
         if strength_deficit and strength_deficit['risk_level'] == 'critical':
-            recommendations.append(f"💪 CRITICAL DEFICIT: Strength training only {strength_deficit['current_pct']:.1f}% - injury risk extremely high")
+            # Calculate 30-day trend for comparison
+            recent_pct = results.get('training_imbalances', {}).get('recent_strength_pct', strength_deficit['current_pct'])
+            if abs(recent_pct - strength_deficit['current_pct']) > 1.0:
+                # Show trend if significantly different
+                trend = "improving" if recent_pct > strength_deficit['current_pct'] else "declining"
+                recommendations.append(f"💪 STRENGTH DEFICIT: {strength_deficit['current_pct']:.1f}% (60d avg) → {recent_pct:.1f}% (30d recent, {trend}) - maintain or increase current level")
 
         # Recovery systems
         recovery = results.get('recovery_system_analysis', {}).get('overall_status', {})

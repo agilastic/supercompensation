@@ -122,3 +122,34 @@
 🔧 Trying HR endpoint: /wellness-service/wellness/daily/2025-09-30
 ⚠️  HR API /wellness-service/wellness/daily/2025-09-30 failed: Error in request: 404 Client Error: Not Found for url: https://connectapi.garmin.com/wellness-service/wellness/daily/2025-09-30
 ❌ No heart rate data found for 2025-09-30 after trying all methods
+
+==================================================
+🔍 RHR Debug for 2025-10-01 at 2025-10-01 08:14:35.981481
+📊 HRV Record attributes: ['baseline', 'calendar_date', 'create_time_stamp', 'feedback_phrase', 'last_night_5_min_high', 'last_night_avg', 'list', 'status', 'weekly_avg']
+💓 HR-related attributes: ['baseline', 'feedback_phrase']
+  • baseline: HRVBaseline(low_upper=38, balanced_low=40, balanced_upper=53, marker_value=0.3653717)
+  • feedback_phrase: HRV_BALANCED_3
+⚠️  No RHR found in HRV record, trying other methods...
+🫀 Testing DailyHeartRate class...
+⚠️  DailyHeartRate failed: module 'garth' has no attribute 'DailyHeartRate'
+🏃 Testing Activities for RHR approximation...
+⚠️  Activities failed: module 'garth' has no attribute 'Activities'
+🔍 Trying available garth classes for HR data...
+👤 Trying UserProfile for baseline RHR...
+🔍 UserProfile HR attrs: ['activity_heart_rate_visibility']
+💓 Trying HRVData class for embedded HR...
+🔍 HRVData HR attrs: []
+🔋 Trying DailyBodyBatteryStress for 2025-10-01...
+📊 Found body_battery_readings data
+🔄 Trying heart rate specific endpoints...
+🔧 Trying HR endpoint: /wellness-service/wellness/heartRate/daily/2025-10-01
+⚠️  HR API /wellness-service/wellness/heartRate/daily/2025-10-01 failed: Error in request: 404 Client Error: Not Found for url: https://connectapi.garmin.com/wellness-service/wellness/heartRate/daily/2025-10-01
+🔧 Trying HR endpoint: /metrics-service/metrics/heartRate/2025-10-01
+⚠️  HR API /metrics-service/metrics/heartRate/2025-10-01 failed: Error in request: 404 Client Error: Not Found for url: https://connectapi.garmin.com/metrics-service/metrics/heartRate/2025-10-01
+🔧 Trying HR endpoint: /userstats-service/heartRate/daily/2025-10-01
+⚠️  HR API /userstats-service/heartRate/daily/2025-10-01 failed: Error in request: 404 Client Error: Not Found for url: https://connectapi.garmin.com/userstats-service/heartRate/daily/2025-10-01
+🔧 Trying HR endpoint: /summary-service/stats/heartRate/2025-10-01
+⚠️  HR API /summary-service/stats/heartRate/2025-10-01 failed: Error in request: 404 Client Error: Not Found for url: https://connectapi.garmin.com/summary-service/stats/heartRate/2025-10-01
+🔧 Trying HR endpoint: /wellness-service/wellness/daily/2025-10-01
+⚠️  HR API /wellness-service/wellness/daily/2025-10-01 failed: Error in request: 404 Client Error: Not Found for url: https://connectapi.garmin.com/wellness-service/wellness/daily/2025-10-01
+❌ No heart rate data found for 2025-10-01 after trying all methods

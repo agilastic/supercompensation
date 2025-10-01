@@ -8,6 +8,7 @@ warnings.filterwarnings("ignore", message="Protobuf gencode version")
 
 import click
 import numpy as np
+import pandas as pd
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from rich.console import Console
@@ -2072,6 +2073,7 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
     """Complete training analysis workflow: sync all data, analyze, and get recommendations."""
 
     errors = []
+    todays_planned_workout = None  # Will be populated from training plan for AI coach
 
     # Step 1: Data Import & Sync
     console.print("")  # Spacing
@@ -2346,6 +2348,9 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
     step45_header = Panel("💡 What Your Body Is Telling You", box=box.HEAVY, style="bold black")
     console.print(step45_header)
 
+    # Initialize for later use in ML Analysis
+    correlation_data_for_ml = None
+
     try:
         from .analysis.correlation_analyzer import WellnessPerformanceCorrelations
 
@@ -2400,52 +2405,15 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
                     )
                     console.print(f"     → {confidence} • Use this for planning ahead")
 
-            # Show top significant correlation in plain language
+            # Store correlation data for ML Analysis section (don't display here)
             sig_corrs = results['significant_correlations']
             if sig_corrs:
                 top_corr = max(sig_corrs, key=lambda x: abs(x['correlation']))
-
-                # Translate to plain language
-                metric_names = {
-                    'hrv_rmssd': 'Heart Rate Variability',
-                    'hrv_score': 'HRV',
-                    'sleep_score': 'Sleep Quality',
-                    'stress_avg': 'Stress',
-                    'resting_hr': 'Resting Heart Rate',
-                    'tsb': 'Training Form',
-                    'ctl': 'Fitness',
-                    'atl': 'Fatigue',
-                    'daily_load': 'Training Load',
-                    'ctl_7d_change': 'Fitness Growth',
-                    'weekly_distance_km': 'Weekly Mileage',
-                    'weekly_hours': 'Training Hours'
+                correlation_data_for_ml = {
+                    'top_corr': top_corr,
+                    'leading_indicators': results.get('leading_indicators', []),
+                    'all_correlations': sig_corrs
                 }
-
-                var1 = metric_names.get(top_corr['variable_1'], top_corr['variable_1'])
-                var2 = metric_names.get(top_corr['variable_2'], top_corr['variable_2'])
-
-                console.print(f"\n[bold green]⭐ Your #1 Performance Link:[/bold green]")
-
-                # Make it human-readable
-                direction = top_corr['direction']
-                strength = top_corr['strength']
-
-                if direction == 'negative':
-                    relationship = f"When {var1} goes DOWN, {var2} goes DOWN"
-                    advice = f"Keep your {var1} high for better {var2}"
-                else:
-                    relationship = f"When {var1} goes UP, {var2} goes UP"
-                    advice = f"Improving {var1} improves your {var2}"
-
-                if strength == 'strong':
-                    reliability = "Very reliable relationship"
-                elif strength == 'moderate':
-                    reliability = "Reliable relationship"
-                else:
-                    reliability = "Noticeable pattern"
-
-                console.print(f"  • {relationship}")
-                console.print(f"  • {reliability} • {advice}")
 
             # Simple summary
             console.print(f"\n[dim]📈 Based on your last 30 days of data[/dim]")
@@ -2567,6 +2535,20 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
             daily_workouts = plan_result['daily_workouts']
             sorted_workouts = sorted(daily_workouts, key=lambda w: w.date)
 
+            # Extract today's workout (day 0 or 1) for AI coach context
+            todays_planned_workout = None
+            for workout in sorted_workouts:
+                # Try day 0 first, then day 1 (some plans start at day 1)
+                if workout.day_number == 0 or (todays_planned_workout is None and workout.day_number == 1):
+                    todays_planned_workout = {
+                        'title': workout.title,
+                        'duration': workout.total_duration_min,
+                        'load': workout.planned_load,
+                        'second_activity': workout.second_activity_title if workout.second_activity_title else None,
+                        'second_duration': workout.second_activity_duration if workout.second_activity_title else 0
+                    }
+                    if workout.day_number == 0:
+                        break  # Found day 0, use it
 
             # Skip day 0 (today) and maintain correct data correlation
             for i, workout in enumerate(sorted_workouts):
@@ -3038,13 +3020,181 @@ def run(strava_days, garmin_days, plan_days, skip_strava, skip_garmin, skip_anal
                     trend = "→ stable"
                     trend_color = "green"
 
-                console.print(f"[green]📈 Fitness Trajectory (Simple Forecast):[/green]")
+                console.print(f"[green]📈 Fitness Trajectory (Forecast):[/green]")
                 console.print(f"   • Current: Fitness (CTL) {current_ctl:.1f}, Fatigue (ATL) {current_atl:.1f}, Form (TSB) {current_tsb:.1f} ([{tsb_color}]{tsb_status}[/{tsb_color}])")
                 console.print(f"   • 7-day forecast: Fitness (CTL) {ctl_7d:.1f} ({ctl_7d-current_ctl:+.1f}), Form (TSB) {tsb_7d:.1f} ([{trend_color}]{trend}[/{trend_color}])")
                 console.print(f"   • 14-day forecast: Fitness (CTL) {ctl_14d:.1f} ({ctl_14d-current_ctl:+.1f}), Form (TSB) {tsb_14d:.1f}")
 
-                # Note: Anomaly detection disabled in daily run to prevent crashes
-                # Use dedicated ml-analysis command for full anomaly analysis
+                # AI-Powered Comprehensive Analysis
+                try:
+                    from .ai_coach import AITrainingCoach, check_ollama_available
+
+                    if check_ollama_available():
+                        console.print(f"\n[green]🧠 AI Coach Insights:[/green]")
+                        #console.print(f"   [dim]Question: Is today's planned workout appropriate given my current state?[/dim]\n")
+
+                        # Get comprehensive metrics
+                        latest_full = analysis['combined'].iloc[-1]
+                        recent_7d = analysis['combined'].tail(7)
+                        recent_30d = analysis['combined'].tail(30)
+
+                        # Build correlation info if available
+                        correlation_info = ""
+                        if 'correlation_data_for_ml' in locals() and correlation_data_for_ml:
+                            top_corr = correlation_data_for_ml['top_corr']
+                            metric_names = {
+                                'hrv_rmssd': 'HRV', 'sleep_score': 'Sleep', 'tsb': 'Form',
+                                'ctl': 'Fitness', 'atl': 'Fatigue', 'daily_load': 'Load',
+                                'weekly_distance_km': 'Mileage', 'weekly_hours': 'Hours'
+                            }
+                            v1 = metric_names.get(top_corr['variable_1'], top_corr['variable_1'])
+                            v2 = metric_names.get(top_corr['variable_2'], top_corr['variable_2'])
+                            corr_val = float(top_corr['correlation'])
+                            correlation_info = f"{v1} ↔ {v2} (r={corr_val:.2f})"
+
+                        # Safely extract ALL values as floats/strings first
+                        try:
+                            recovery = float(latest_full.get('overall_recovery', 0))
+                            risk_state = str(latest_full.get('risk_state', 'OPTIMAL')).replace('_', ' ')
+                            load_30d = float(recent_30d['load'].sum())
+                            load_7d = float(recent_7d['load'].sum())
+
+                            # Ensure all numeric values are float
+                            current_ctl = float(current_ctl)
+                            current_atl = float(current_atl)
+                            current_tsb = float(current_tsb)
+                            ctl_7d = float(ctl_7d)
+                            tsb_7d = float(tsb_7d)
+                            tsb_14d = float(tsb_14d)
+
+                            # Build prompt that explicitly asks about planned workout
+                            # Format today's workout description first
+                            if todays_planned_workout:
+                                planned_desc = "{} ({}min, {} TSS)".format(
+                                    todays_planned_workout['title'],
+                                    todays_planned_workout['duration'],
+                                    round(todays_planned_workout['load']))
+                                if todays_planned_workout['second_activity']:
+                                    planned_desc += " + {} ({}min)".format(
+                                        todays_planned_workout['second_activity'],
+                                        todays_planned_workout['second_duration'])
+                            else:
+                                planned_desc = "No workout planned"
+
+                            prompt_text = "Evaluate today's planned workout against current training state:\n\n"
+                            prompt_text += "PLANNED TODAY: {}\n\n".format(planned_desc)
+                            prompt_text += "CURRENT STATE:\n"
+                            prompt_text += "• CTL {}, ATL {}, TSB {} ({})\n".format(
+                                round(current_ctl, 1), round(current_atl, 1), round(current_tsb, 1), str(tsb_status))
+                            prompt_text += "• Recovery: {}%, Risk: {}\n".format(round(recovery), str(risk_state))
+                            prompt_text += "• Load: 30d {} TSS, 7d {} TSS\n".format(round(load_30d), round(load_7d))
+                            prompt_text += "• Forecast: 7d TSB {} ({}), 14d TSB {}\n".format(
+                                round(tsb_7d, 1), str(trend), round(tsb_14d, 1))
+                            prompt_text += "• Pattern: {}\n\n".format(correlation_info if correlation_info else 'None')
+                            prompt_text += "Answer these questions (3-4 bullet points, each 1-2 sentences):\n"
+                            prompt_text += "1. Is today's planned workout appropriate? Should it be modified or skipped?\n"
+                            prompt_text += "2. Based on current state and forecast, what's the key risk or opportunity?\n"
+                            prompt_text += "3. Which metric should be monitored most closely this week?\n"
+                            prompt_text += "4. One specific actionable recommendation for this workout or recovery.\n\n"
+                            prompt_text += "Be direct and data-driven. If the workout is appropriate, say PROCEED. If modifications needed, be specific."
+
+                            #console.print(f"   [dim]Generating AI insights...[/dim]")
+
+                            # Get HRV and Sleep data directly from database (not in combined dataframe)
+                            from .db.models import HRVData, SleepData, BloodPressure
+                            thirty_days_ago = datetime.now() - timedelta(days=30)
+
+                            # Query most recent HRV data
+                            latest_hrv_data = session.query(HRVData).filter(
+                                HRVData.date >= thirty_days_ago,
+                                HRVData.hrv_rmssd.isnot(None)
+                            ).order_by(HRVData.date.desc()).first()
+
+                            # Query most recent sleep data
+                            latest_sleep_data = session.query(SleepData).filter(
+                                SleepData.date >= thirty_days_ago,
+                                SleepData.sleep_score.isnot(None)
+                            ).order_by(SleepData.date.desc()).first()
+
+                            # Query most recent resting heart rate
+                            latest_bp_data = session.query(BloodPressure).filter(
+                                BloodPressure.date >= thirty_days_ago,
+                                BloodPressure.heart_rate.isnot(None)
+                            ).order_by(BloodPressure.date.desc()).first()
+
+                            latest_hrv = latest_hrv_data.hrv_rmssd if latest_hrv_data else None
+                            latest_sleep = latest_sleep_data.sleep_score if latest_sleep_data else None
+                            latest_rhr = latest_bp_data.heart_rate if latest_bp_data else None
+
+                            # Get recent activities for context
+                            from datetime import timedelta
+                            seven_days_ago = datetime.now() - timedelta(days=7)
+                            recent_activities = session.query(Activity).filter(
+                                Activity.start_date >= seven_days_ago
+                            ).order_by(Activity.start_date.desc()).limit(10).all()
+
+                            activity_log = []
+                            for act in recent_activities:
+                                act_date = act.start_date.strftime('%Y-%m-%d')
+                                act_type = act.type or 'Training'
+                                act_name = act.name or ''
+                                distance_km = (act.distance / 1000) if act.distance else 0
+                                duration_min = (act.moving_time / 60) if act.moving_time else 0
+                                tss = act.training_load if hasattr(act, 'training_load') and act.training_load else 0
+                                activity_log.append(f"{act_date} {act_type}: {act_name[:30]} - {distance_km:.1f}km, {duration_min:.0f}min, {tss:.0f} TSS")
+
+                            activity_log_str = "\n".join(activity_log) if activity_log else "No activities in last 7 days"
+
+                            # Format today's planned workout for AI context
+                            if todays_planned_workout:
+                                workout_desc = f"{todays_planned_workout['title']} ({todays_planned_workout['duration']}min, {todays_planned_workout['load']:.0f} TSS)"
+                                if todays_planned_workout['second_activity']:
+                                    workout_desc += f" + {todays_planned_workout['second_activity']} ({todays_planned_workout['second_duration']}min)"
+                            else:
+                                workout_desc = "No workout planned"
+
+                            # Build comprehensive context with ALL available data
+                            ai_context = {
+                                'ctl': current_ctl,
+                                'atl': current_atl,
+                                'tsb': current_tsb,
+                                'hrv': latest_hrv,
+                                'sleep_score': latest_sleep,
+                                'rhr': latest_rhr,
+                                'readiness': recovery,
+                                'risk_state': risk_state.replace(' ', '_').upper(),
+                                'planned_workout': 'IMPORTANT' + workout_desc + 'This planned WORKOUT must be kept. You can MODIFY it!',
+                                'recent_summary': f"Last 7 days: {load_7d:.0f} TSS, Last 30 days: {load_30d:.0f} TSS",
+                                'activity_log': activity_log_str
+                            }
+
+
+                            coach = AITrainingCoach(use_ollama=True, model='deepseek-coder-v2')
+                            insights = coach.get_recommendation(prompt_text, ai_context)
+                            #console.print(f"\n   [dim]AI returned {len(insights)} characters[/dim]")
+
+                            # Clean and display
+                            import re
+                            # Remove emojis but keep content
+                            clean = re.sub(r'[💡🏃📊⚠️✅🟡🟠🔴❓━─]', '', insights)
+                            # Remove headers but be less aggressive
+                            clean = re.sub(r'^(Recommendation:|Suggested Workout:|Reasoning:|Warnings:)\s*', '', clean, flags=re.MULTILINE)
+                            # Remove recommendation types
+                            clean = re.sub(r'\b(MODIFY|PROCEED|REST)\b\s*', '', clean)
+
+                            # Split into lines and clean
+                            lines = [l.strip() for l in clean.split('\n') if l.strip()]
+
+                            # Display meaningful lines
+                            count = 0
+                            for line in lines:
+                                if len(line) > 20 and count < 8:  # Show up to 8 insights
+                                    console.print(f"   • {line}")
+                                    count += 1
+                        except Exception as inner_err:
+                            console.print(f"   [dim]AI generation error: {str(inner_err)[:100]}[/dim]")
+                except Exception as ai_err:
+                    console.print(f"   [dim](AI analysis error: {str(ai_err)[:80]})[/dim]")
             else:
                 console.print(f"[green]   Need 60+ days of data for LSTM forecasting[/green]")
 

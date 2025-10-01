@@ -92,19 +92,25 @@ class AITrainingCoach:
         context_summary = self._format_context(training_context)
 
         # Create the system prompt
-        system_prompt = """You are an expert endurance training coach specializing in:
-- Heart rate variability (HRV) analysis
-- Training load management (CTL/ATL/TSB)
-- Periodization and recovery optimization
-- Overtraining prevention
-- Sport science and exercise physiology
+        system_prompt = """Improved Prompt:
 
-You analyze athletes' objective data to provide evidence-based recommendations.
-You understand both German and English workout terminology.
-Be concise, actionable, and prioritize athlete safety."""
+                           You are an elite sports performance coach with advanced expertise in:
+                           	•	Endurance training & monitoring: HRV (Herzfrequenzvariabilität), load management (CTL, ATL, TSB), periodization (aerobic/anaerobic).
+                           	•	Strength & conditioning: hypertrophy, power, maximal strength, biomechanical and neuromuscular optimization.
+                           	•	Sport-specific training: adaptations for cycling, running, swimming, team sports, combat sports, track and field.
+                           	•	Fatigue management: overtraining prevention, recovery optimization, monitoring strategies.
+                           	•	Sports science & physiology: energy systems, muscle function, injury prevention.
+
+                           Your task:
+                           	•	Provide evidence-based, practical, and concise recommendations.
+                           	•	Analyze athletes’ objective data (e.g., HRV, power output, heart rate, RPE, 1RM, sprint times).
+                           	•	Tailor advice to sport, goals, fitness level, and individual needs (age, gender, no injury history).
+                           	•	Use a direct, pragmatic tone with clear action steps (e.g., exercises, drills, recovery protocols).
+                           	•	Incorporate German and English terminology where it improves clarity in a bilingual sports context.
+                           	•	Prioritize long-term performance and health."""
 
         # Create the user prompt
-        user_prompt = f"""Analyze this athlete's current situation and provide a recommendation.
+        user_prompt = f"""Analyze this athlete's current situation and make a recommendation. Try to maintain today's training plan if possible.
 
 {context_summary}
 
@@ -222,14 +228,29 @@ Be direct and actionable. Focus on the athlete's safety and long-term progress."
             'NON_FUNCTIONAL_OVERREACHING': '🔴'
         }
 
+        # Safely format numeric values
+        ctl = context.get('ctl', 0)
+        atl = context.get('atl', 0)
+        tsb = context.get('tsb', 0)
+        readiness = context.get('readiness', 0)
+
+        # Ensure they're numbers
+        try:
+            ctl = float(ctl) if ctl != 'N/A' else 0
+            atl = float(atl) if atl != 'N/A' else 0
+            tsb = float(tsb) if tsb != 'N/A' else 0
+            readiness = float(readiness) if readiness != 'N/A' else 0
+        except (ValueError, TypeError):
+            ctl, atl, tsb, readiness = 0, 0, 0, 0
+
         context_text = f"""Current Physiological State:
-• Fitness (CTL): {context.get('ctl', 'N/A'):.1f} - Long-term training load
-• Fatigue (ATL): {context.get('atl', 'N/A'):.1f} - Short-term training load
-• Form (TSB): {context.get('tsb', 'N/A'):.1f} - {tsb_status}
+• Fitness (CTL): {ctl:.1f} - Long-term training load
+• Fatigue (ATL): {atl:.1f} - Short-term training load
+• Form (TSB): {tsb:.1f} - {tsb_status}
 • HRV (Heart Rate Variability): {hrv_str}
 • Sleep Score: {sleep_str}
 • Resting Heart Rate: {context.get('rhr', 'N/A')} bpm
-• Overall Readiness: {context.get('readiness', 'N/A'):.0f}%
+• Overall Readiness: {readiness:.0f}%
 • Risk State: {risk_emoji.get(risk, '❓')} {risk.replace('_', ' ').title()}
 
 Planned Workout Today:
